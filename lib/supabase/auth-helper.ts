@@ -1,5 +1,6 @@
-import { createAdminClient } from '@/lib/supabase/server'
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
+import { cache } from 'react'
 
 /**
  * Safely decodes a Supabase Auth JWT token payload without network calls.
@@ -113,6 +114,18 @@ function extractTokenFromCookies(cookieHeader?: string | null, cookieStoreAll?: 
 
     return null
 }
+
+/**
+ * Memorize user data fetches in Next.js SSR context to dramatically reduce 429 errors from Supabase.
+ */
+export const getCachedUser = cache(async () => {
+    try {
+        const supabase = await createClient()
+        return await getAuthenticatedUser(supabase)
+    } catch {
+        return null
+    }
+})
 
 /**
  * Robustly retrieves the authenticated user for API routes.

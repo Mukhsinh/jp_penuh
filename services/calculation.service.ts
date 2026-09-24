@@ -502,11 +502,13 @@ export async function runFullCalculation(period: string) {
       }
     }
 
-    // Get employee count for logging
+    // Get employee count for logging (excluding superadmin and ADMIN unit)
     const { count: employeeCount } = await supabase
       .from('m_employees')
-      .select('*', { count: 'exact', head: true })
+      .select('id, m_units!inner(code)', { count: 'exact', head: true })
       .eq('is_active', true)
+      .neq('role', 'superadmin')
+      .neq('m_units.code', 'ADMIN')
 
     // Step 2: Calculate individual scores (P1, P2, P3)
     await calculateIndividualScores(period)

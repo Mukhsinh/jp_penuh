@@ -386,8 +386,9 @@ export async function POST(request: NextRequest) {
       // --- Summary Logic Sync ---
       let empListQuery = supabase
         .from('m_employees')
-        .select('id, unit_id, role, is_active, m_units(kpi_schema_mode)')
+        .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
         .neq('role', 'superadmin')
+        .neq('m_units.code', 'ADMIN')
 
       if (effectiveUnitId) {
         empListQuery = empListQuery.eq('unit_id', effectiveUnitId)
@@ -593,8 +594,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
   // 3. Get assessments for the filtered employees in this period
   // Use batchedIn to avoid PostgREST URL length overflow with large employee sets
   const mainSelectFields = `
+    id,
     employee_id,
     indicator_id,
+    sub_indicator_id,
+    revenue_type,
     score,
     weight_percentage,
     achievement_percentage,
@@ -646,7 +650,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     batchedIn(
       supabase,
       't_kpi_assessments',
-      'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+      'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
       'employee_id',
       empIds,
       q => {
@@ -679,7 +683,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       batchedIn(
         supabase,
         't_kpi_assessments',
-        'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+        'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
         'employee_id',
         empIds,
         q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
@@ -720,6 +724,18 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
   // Filter out orphaned or inactive assessment records that don't belong to the unit's active categories for the revenue type
   try {
+    const { count: totalEmployeesDb } = await supabase
+      .from('m_employees')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .neq('role', 'superadmin')
+
+    const { count: totalUnitsDb } = await supabase
+      .from('m_units')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .neq('code', 'ADMIN')
+
     const { data: activeCategories } = await supabase
       .from('m_kpi_categories')
       .select('id, unit_id, revenue_type')

@@ -125,16 +125,24 @@ export async function middleware(request: NextRequest) {
       }
     )
 
-    // IMPORTANT: Verify user session using getUser()
-    // getSession() is insecure in middleware and can cause refresh token errors
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    // IMPORTANT: Verify user session securely
+    let { data: { user }, error: userError } = await supabase.auth.getUser()
 
-    // If there's an error and it's related to invalid/missing tokens, 
-    // we let it be handled by the session check below
     if (userError) {
-      // Don't log expected auth errors to keep console clean
       if (!userError.message.includes('Refresh Token Not Found')) {
-        console.warn('[MIDDLEWARE] Auth check:', userError.message)
+        console.warn('[MIDDLEWARE] Auth check getUser error:', userError.message)
+      }
+
+      // Fallback: If getUser implies a rate limit or internal server fail (not an explicitly rejected token),
+      // verify using local JWT session to save the user from suddenly getting logged out.
+      const status = (userError as any)?.status
+      if (status === 429 || status >= 500) {
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (sessionData && sessionData.session && sessionData.session.user) {
+          user = sessionData.session.user
+          userError = null
+          console.log('[MIDDLEWARE] Fallback to getSession succeeded despite rate limit.')
+        }
       }
     }
 
@@ -172,15 +180,7 @@ export async function middleware(request: NextRequest) {
       // Only redirect to login if not already on login page
       if (pathname !== '/login') {
         const loginUrl = new URL('/login', request.url)
-        const redirectResponse = NextResponse.redirect(loginUrl)
-
-        // Clear auth cookies
-        const cookiesToClear = ['sb-access-token', 'sb-refresh-token', 'supabase-auth-token', 'sb-auth-token']
-        cookiesToClear.forEach(cookieName => {
-          redirectResponse.cookies.set(cookieName, '', { maxAge: 0, path: '/' })
-        })
-
-        return redirectResponse
+        return NextResponse.redirect(loginUrl)
       }
       // If already on login page, just continue
       return response
@@ -262,14 +262,7 @@ export async function middleware(request: NextRequest) {
       }
       const loginUrl = new URL('/login', request.url)
       loginUrl.searchParams.set('error', 'inactive')
-
-      const redirectResponse = NextResponse.redirect(loginUrl)
-      const cookiesToClear = ['sb-access-token', 'sb-refresh-token', 'supabase-auth-token', 'sb-auth-token']
-      cookiesToClear.forEach(cookieName => {
-        redirectResponse.cookies.set(cookieName, '', { maxAge: 0, path: '/' })
-      })
-
-      return redirectResponse
+      return NextResponse.redirect(loginUrl)
     }
 
     // 7. Check route authorization
@@ -298,15 +291,10 @@ export async function middleware(request: NextRequest) {
       return response
     }
 
-    // On any error for protected routes, redirect to login and clear cookies
+    // On any error for protected routes, redirect to login without clearing cookies
+    // to prevent wiping session on random network hiccups.
     const loginUrl = new URL('/login', request.url)
-    const redirectResponse = NextResponse.redirect(loginUrl)
-    const cookiesToClear = ['sb-access-token', 'sb-refresh-token', 'supabase-auth-token', 'sb-auth-token']
-    cookiesToClear.forEach(cookieName => {
-      redirectResponse.cookies.set(cookieName, '', { maxAge: 0, path: '/' })
-    })
-
-    return redirectResponse
+    return NextResponse.redirect(loginUrl)
   }
 }
 

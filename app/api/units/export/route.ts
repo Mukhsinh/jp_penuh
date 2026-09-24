@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
     const { data: units, error } = await adminClient
       .from('m_units')
       .select('*')
+      .neq('code', 'ADMIN')
       .order('code', { ascending: true })
 
     if (error) throw error
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
           .from('m_employees')
           .select('*', { count: 'exact', head: true })
           .eq('unit_id', unit.id)
+          .neq('role', 'superadmin')
 
         return {
           ...unit,

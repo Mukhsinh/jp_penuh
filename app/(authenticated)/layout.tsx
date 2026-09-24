@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import Sidebar from '@/components/navigation/Sidebar'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Footer } from '@/components/layout/Footer'
-import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
+import { getCachedUser } from '@/lib/supabase/auth-helper'
 
 export default async function AuthenticatedLayout({
   children,
@@ -12,8 +12,8 @@ export default async function AuthenticatedLayout({
 }) {
   const supabase = await createClient()
 
-  // Verify session safely without triggering AuthApiError on rate limits
-  const user = await getAuthenticatedUser(supabase)
+  // Verify session safely using request-level cache to prevent AuthApiError 429
+  const user = await getCachedUser()
 
   if (!user) {
     redirect('/login')

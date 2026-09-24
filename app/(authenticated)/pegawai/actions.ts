@@ -277,7 +277,7 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
       .from('m_units')
       .select('id, name')
       .eq('is_active', true)
-      .neq('code', 'superadmin')
+      .neq('code', 'ADMIN')
       .order('name')
 
     if (error) {
@@ -308,12 +308,13 @@ export async function getPegawaiStats(unitId?: string): Promise<{
 
     const adminSupabase = await createAdminClient()
 
-    // Fetch all active employees (excluding superadmin)
+    // Fetch all active employees (excluding superadmin and ADMIN unit)
     let query = adminSupabase
       .from('m_employees')
-      .select('pns_grade, employment_status, unit_id, m_units(name)')
+      .select('pns_grade, employment_status, unit_id, m_units!inner(name, code)')
       .eq('is_active', true)
       .neq('role', 'superadmin')
+      .neq('m_units.code', 'ADMIN')
 
     // Apply unit filter
     if (unitId && unitId !== 'all') {

@@ -239,12 +239,13 @@ export class DashboardService {
     try {
       const resolvedPeriods = await this.getResolvedPeriods(supabase, period, year)
 
-      // 1. Get employees to be assessed (non-superadmin, active)
+      // 1. Get employees to be assessed (non-superadmin, active, not in ADMIN unit)
       let empQuery = supabase
         .from('m_employees')
-        .select('id, unit_id', { count: 'exact' })
+        .select('id, unit_id, m_units!inner(code)', { count: 'exact' })
         .eq('is_active', true)
-        .neq('role', 'superadmin');
+        .neq('role', 'superadmin')
+        .neq('m_units.code', 'ADMIN');
 
       if (unitId && unitId !== 'all') {
         empQuery = empQuery.eq('unit_id', unitId);

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 export async function POST() {
   try {
-    const projectRef = process.env.SUPABASE_PROJECT_REF || 'szlfsfanbmvbvxrbaggk'
+    const projectRef = process.env.SUPABASE_PROJECT_REF || 'fzqjxmkqegotbptmetpp'
     const accessToken = process.env.SUPABASE_ACCESS_TOKEN || process.env.SUPABASE_ACCESS_TOKEN_KEY
 
     if (!accessToken) {

@@ -2,6 +2,7 @@ export interface Assessment {
   id?: string
   employee_id: string
   indicator_id: string
+  sub_indicator_id?: string | null
   period: string
   realization_value: number
   target_value: number
@@ -10,6 +11,7 @@ export interface Assessment {
   score?: number
   notes?: string
   assessor_id: string
+  revenue_type?: string | null
   created_at?: string
   updated_at?: string
 }

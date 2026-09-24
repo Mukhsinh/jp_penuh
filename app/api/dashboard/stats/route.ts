@@ -104,6 +104,7 @@ export async function GET(request: Request) {
         .from('m_employees')
         .select('*', { count: 'exact', head: true })
         .eq('unit_id', employee.unit_id)
+        .neq('role', 'superadmin')
 
       // Realizations this month
       const { count: realizationsCount } = await supabase
