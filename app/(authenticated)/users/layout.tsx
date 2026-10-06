@@ -20,7 +20,7 @@ export default async function UsersLayout({
     const isSuperAdmin = (
         user.app_metadata?.role === 'superadmin' ||
         user.user_metadata?.role === 'superadmin' ||
-        email === 'admin@sungaibahar.com'
+        email === 'admin@sungaipenuh.com'
     )
 
     if (!isSuperAdmin) {

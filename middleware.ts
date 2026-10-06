@@ -202,7 +202,7 @@ export async function middleware(request: NextRequest) {
       const appMeta = session.user.app_metadata || {}
 
       const rawRole = (appMeta.role || userMeta.role || '').toString().toLowerCase()
-      const isAdmin = rawRole === 'superadmin' || rawRole === 'admin' || session.user.email === 'admin@sungaibahar.com'
+      const isAdmin = rawRole === 'superadmin' || rawRole === 'admin' || session.user.email === 'admin@sungaipenuh.com'
 
       if (isAdmin) {
         employeeData = {

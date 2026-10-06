@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     const isSuperAdmin =
       appRole === 'superadmin' ||
       userRole === 'superadmin' ||
-      email === 'admin@sungaibahar.com'
+      email === 'admin@sungaipenuh.com'
 
     // Try by user_id first, then fallback to email
     let currentEmployee: any = null

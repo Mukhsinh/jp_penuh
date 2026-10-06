@@ -23,7 +23,7 @@ INSERT INTO m_employees (
   'Admin Sungai Bahar',
   (SELECT id FROM m_units WHERE code = 'IT'),
   'superadmin',
-  'admin@sungaibahar.com',
+  'admin@sungaipenuh.com',
   'TK/0',
   true
 )
@@ -41,4 +41,4 @@ SELECT
   role,
   is_active
 FROM m_employees 
-WHERE email = 'admin@sungaibahar.com';
+WHERE email = 'admin@sungaipenuh.com';

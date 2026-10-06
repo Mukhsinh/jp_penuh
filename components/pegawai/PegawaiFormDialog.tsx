@@ -181,7 +181,7 @@ export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai }: Pegawai
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder="email@sungaibahar.com"
+                placeholder="email@sungaipenuh.com"
                 disabled={loading}
               />
             </div>

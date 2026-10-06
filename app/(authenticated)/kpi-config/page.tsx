@@ -76,7 +76,7 @@ export default function KPIConfigPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         const authRole = user.app_metadata?.role || user.user_metadata?.role
-        const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
+        const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaipenuh.com'
         const role = isSuperAdmin ? 'superadmin' : (authRole || 'employee')
 
         setUserMetadata({
@@ -318,16 +318,14 @@ export default function KPIConfigPage() {
     setIsCopyDialogOpen(false)
   }, [loadKPIStructure])
 
-  const handleDownloadGuide = useCallback((revType?: string) => {
+  const handleDownloadGuide = useCallback((revType?: string, format: 'pdf' | 'word' = 'pdf') => {
     const selectedRev = revType || activeRevenueType
     const revenueParam = `revenueType=${selectedRev}`
-    const url = selectedUnit ? `/api/kpi-config/guide?unitId=${selectedUnit}&${revenueParam}` : `/api/kpi-config/guide?${revenueParam}`
+    const formatParam = `format=${format}`
+    const url = selectedUnit
+      ? `/api/kpi-config/guide?unitId=${selectedUnit}&${revenueParam}&${formatParam}`
+      : `/api/kpi-config/guide?${revenueParam}&${formatParam}`
     window.open(url, '_blank')
-  }, [selectedUnit, activeRevenueType])
-
-  const handleDownloadReport = useCallback((format: 'excel' | 'pdf') => {
-    if (!selectedUnit) return
-    window.open(`/api/kpi-config/export?unitId=${selectedUnit}&format=${format}&revenueType=${activeRevenueType}`, '_blank')
   }, [selectedUnit, activeRevenueType])
 
   if (!mounted || (isLoading && units.length === 0)) {
@@ -371,43 +369,35 @@ export default function KPIConfigPage() {
             <DropdownMenuTrigger asChild>
               <Button className="bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all">
                 <Download className="h-4 w-4 mr-2" />
-                Petunjuk PDF
+                Petunjuk (PDF / Word)
                 <ChevronDown className="h-4 w-4 ml-2" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={() => handleDownloadGuide('bpjs')} className="cursor-pointer">
+            <DropdownMenuContent align="end" className="w-64">
+              <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 border-b border-gray-100">
+                Format PDF
+              </div>
+              <DropdownMenuItem onClick={() => handleDownloadGuide('bpjs', 'pdf')} className="cursor-pointer">
                 <FileText className="h-4 w-4 mr-2 text-blue-600" />
-                Versi BPJS Kesehatan
+                Versi BPJS Kesehatan (PDF)
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleDownloadGuide('umum')} className="cursor-pointer">
+              <DropdownMenuItem onClick={() => handleDownloadGuide('umum', 'pdf')} className="cursor-pointer">
                 <FileText className="h-4 w-4 mr-2 text-emerald-600" />
-                Versi Pendapatan UMUM
+                Versi Pendapatan UMUM (PDF)
+              </DropdownMenuItem>
+              <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 border-y border-gray-100 mt-1">
+                Format Word (DOCX)
+              </div>
+              <DropdownMenuItem onClick={() => handleDownloadGuide('bpjs', 'word')} className="cursor-pointer">
+                <FileSpreadsheet className="h-4 w-4 mr-2 text-blue-700" />
+                Versi BPJS Kesehatan (Word)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleDownloadGuide('umum', 'word')} className="cursor-pointer">
+                <FileSpreadsheet className="h-4 w-4 mr-2 text-emerald-700" />
+                Versi Pendapatan UMUM (Word)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {selectedUnit && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg transition-all">
-                  <Download className="h-4 w-4 mr-2" />
-                  Unduh Laporan
-                  <ChevronDown className="h-4 w-4 ml-2" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleDownloadReport('excel')} className="cursor-pointer">
-                  <FileSpreadsheet className="h-4 w-4 mr-2 text-green-600" />
-                  Format Excel
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleDownloadReport('pdf')} className="cursor-pointer">
-                  <FileText className="h-4 w-4 mr-2 text-red-600" />
-                  Format PDF
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
 
           {!isReadOnly && (
             <>

@@ -17,13 +17,18 @@ export async function GET(request: NextRequest) {
     const format = searchParams.get('format') || 'excel'
 
     // Get all units with employee count
-    const { data: units, error } = await adminClient
+    const { data: rawUnits, error } = await adminClient
       .from('m_units')
       .select('*')
-      .neq('code', 'ADMIN')
       .order('code', { ascending: true })
 
     if (error) throw error
+
+    const units = (rawUnits || []).filter((u: any) => {
+      const code = String(u.code || '').toUpperCase()
+      const name = String(u.name || '').toUpperCase()
+      return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
+    })
 
     // Get employee counts
     const unitsWithCounts = await Promise.all(
@@ -60,7 +65,7 @@ export async function GET(request: NextRequest) {
       doc.setFontSize(10)
       doc.setFont('helvetica', 'normal')
       doc.text('Kabupaten Muaro Jambi, Provinsi Jambi', 105, 28, { align: 'center' })
-      doc.text('Email: admin@sungaibahar.com', 105, 33, { align: 'center' })
+      doc.text('Email: admin@sungaipenuh.com', 105, 33, { align: 'center' })
 
       // Line separator
       doc.setLineWidth(0.5)

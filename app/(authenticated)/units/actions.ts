@@ -19,14 +19,12 @@ export async function getUnitsWithCounts() {
         // Use regular client for others to respect RLS
         const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
-        const { data: units, error: unitsError } = await fetchClient
+        const { data: rawUnits, error: unitsError } = await fetchClient
             .from('m_units')
             .select(`
         *,
         employees:m_employees(count)
       `)
-            .neq('code', 'ADMIN')
-            .neq('name', 'SUPERADMIN')
             .order('code', { ascending: true })
 
         if (unitsError) {
@@ -34,7 +32,13 @@ export async function getUnitsWithCounts() {
             return { data: [], error: unitsError.message }
         }
 
-        return { data: units || [] }
+        const units = (rawUnits || []).filter(u => {
+            const code = String(u.code || '').toUpperCase()
+            const name = String(u.name || '').toUpperCase()
+            return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
+        })
+
+        return { data: units }
     } catch (error: any) {
         console.error('getUnitsWithCounts error:', error)
         return { data: [], error: error.message || 'Terjadi kesalahan' }

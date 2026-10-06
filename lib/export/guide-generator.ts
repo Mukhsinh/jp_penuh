@@ -17,7 +17,7 @@ export async function generateSystemGuide(unitId?: string, revenueType: string =
     appName: 'JASPEL',
     organizationName: 'RUMAH SAKIT SUNGAI BAHAR',
     address: 'Kabupaten Muaro Jambi, Provinsi Jambi',
-    email: 'admin@sungaibahar.com',
+    email: 'admin@sungaipenuh.com',
     footerText: '',
     logo: ''
   }
@@ -322,7 +322,6 @@ export async function generateSystemGuide(unitId?: string, revenueType: string =
             { content: ind.code, styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } as any },
             { content: ind.name + indAdditionalInfo, styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } as any },
             { content: ind.calculation_method === 'priority' ? 'Prioritas' : `${ind.weight_percentage || 0}%`, styles: { fontStyle: 'bold', fillColor: [241, 245, 249], halign: 'center' } as any },
-            { content: `${ind.target_value || 0} ${ind.measurement_unit || ''}`, styles: { fontStyle: 'bold', fillColor: [241, 245, 249], halign: 'center' } as any },
             { content: ind.calculation_method === 'priority' ? 'Metode Prioritas (Direct Payout)' : 'Metode Indeksasi (PIR)', styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } as any }
           ])
 
@@ -352,7 +351,6 @@ export async function generateSystemGuide(unitId?: string, revenueType: string =
               { content: `   ${sub.code}`, styles: { fontStyle: 'normal' } },
               { content: sub.name + (sub.description ? `\n(${sub.description})` : '') },
               { content: `${sub.weight_percentage || 0}%`, styles: { halign: 'center' } },
-              { content: `${sub.target_value || 0} ${sub.measurement_unit || ''}`, styles: { halign: 'center' } },
               { content: criteriaText }
             ])
           }
@@ -360,17 +358,16 @@ export async function generateSystemGuide(unitId?: string, revenueType: string =
 
         autoTable(doc, {
           startY: currentY,
-          head: [['Kode', 'Indikator / Sub-Indikator', 'Bobot', 'Target & Satuan', 'Kriteria Penilaian / Indeks']],
+          head: [['Kode', 'Indikator / Sub-Indikator', 'Bobot', 'Kriteria Penilaian / Indeks']],
           body: tableBody,
           theme: 'grid',
           styles: { fontSize: 8, cellPadding: 2.5, valign: 'middle' },
           headStyles: { fillColor: [30, 58, 138], textColor: 255, fontStyle: 'bold' },
           columnStyles: {
             0: { cellWidth: 20 },
-            1: { cellWidth: 65 },
-            2: { cellWidth: 18, halign: 'center' },
-            3: { cellWidth: 27, halign: 'center' },
-            4: { cellWidth: 'auto' }
+            1: { cellWidth: 75 },
+            2: { cellWidth: 20, halign: 'center' },
+            3: { cellWidth: 'auto' }
           },
           margin: { left: 15, right: 15 }
         })

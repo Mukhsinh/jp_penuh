@@ -92,7 +92,7 @@ export function useAuth() {
 
       // OPTIMIZED: Consistent role detection with middleware
       const rawRole = (userMeta.role || '').toString().toLowerCase()
-      const isSuperEmail = sessionUser.email === 'admin@sungaibahar.com'
+      const isSuperEmail = sessionUser.email === 'admin@sungaipenuh.com'
       let role = (isSuperEmail || rawRole === 'superadmin') ? 'superadmin' : (rawRole || 'employee') as Role
 
       // Try to get employee data with timeout

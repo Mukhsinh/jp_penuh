@@ -14,7 +14,7 @@ export async function getUnitsForKPI() {
         const isSuperAdmin =
             user.app_metadata?.role === 'superadmin' ||
             user.user_metadata?.role === 'superadmin' ||
-            user.email === 'admin@sungaibahar.com'
+            user.email === 'admin@sungaipenuh.com'
 
         const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
@@ -22,13 +22,16 @@ export async function getUnitsForKPI() {
             .from('m_units')
             .select('id, code, name, kpi_schema_mode')
             .eq('is_active', true)
-            .neq('code', 'ADMIN')
-            .neq('name', 'SUPERADMIN')
             .order('code')
 
         if (error) throw error
 
-        let filteredUnits = data || []
+        let filteredUnits = (data || []).filter(u => {
+            const code = String(u.code || '').toUpperCase()
+            const name = String(u.name || '').toUpperCase()
+            return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
+        })
+
         if (!isSuperAdmin && user.user_metadata?.role === 'unit_manager' && user.user_metadata.unit_id) {
             filteredUnits = filteredUnits.filter(u => u.id === user.user_metadata.unit_id)
         }
@@ -49,7 +52,7 @@ export async function updateUnitKPISchemaMode(unitId: string, kpiSchemaMode: str
         const isSuperAdmin =
             user.app_metadata?.role === 'superadmin' ||
             user.user_metadata?.role === 'superadmin' ||
-            user.email === 'admin@sungaibahar.com'
+            user.email === 'admin@sungaipenuh.com'
 
         const client = isSuperAdmin ? await createAdminClient() : supabase
 
@@ -78,7 +81,7 @@ export async function getKPIStructure(unitId: string, revenueType: string = 'all
         const isSuperAdmin =
             user.app_metadata?.role === 'superadmin' ||
             user.user_metadata?.role === 'superadmin' ||
-            user.email === 'admin@sungaibahar.com'
+            user.email === 'admin@sungaipenuh.com'
 
         const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 

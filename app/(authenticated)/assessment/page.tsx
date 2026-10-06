@@ -55,7 +55,7 @@ export default async function AssessmentPage() {
     const availablePeriods = await getAvailablePeriods(supabase)
 
     const authRole = user.role || user.app_metadata?.role || user.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
+    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaipenuh.com'
 
     const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 

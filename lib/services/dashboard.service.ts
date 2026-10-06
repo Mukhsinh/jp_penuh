@@ -242,19 +242,26 @@ export class DashboardService {
       // 1. Get employees to be assessed (non-superadmin, active, not in ADMIN unit)
       let empQuery = supabase
         .from('m_employees')
-        .select('id, unit_id, m_units!inner(code)', { count: 'exact' })
+        .select('id, unit_id, m_units!inner(code, name)', { count: 'exact' })
         .eq('is_active', true)
-        .neq('role', 'superadmin')
-        .neq('m_units.code', 'ADMIN');
+        .neq('role', 'superadmin');
 
       if (unitId && unitId !== 'all') {
         empQuery = empQuery.eq('unit_id', unitId);
       }
 
-      const { data: allEmployees, count: totalDisplayEmployees, error: empError } = await empQuery;
+      const { data: rawEmployees, error: empError } = await empQuery;
       if (empError) throw empError;
 
-      const empIds = (allEmployees || []).map(e => e.id);
+      const validEmployees = (rawEmployees || []).filter((e: any) => {
+        const u = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units;
+        const code = String(u?.code || '').toUpperCase();
+        const name = String(u?.name || '').toUpperCase();
+        return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN');
+      });
+
+      const totalDisplayEmployees = validEmployees.length;
+      const empIds = validEmployees.map((e: any) => e.id);
 
       // 2. Fetch assessments in batches of employees to avoid 1000 row limit / URL length issues
       const assessments: any[] = [];
@@ -289,13 +296,18 @@ export class DashboardService {
       }
 
       // 3. Get total active units for context
-      const { count: totalUnitsCount } = await supabase
+      const { data: rawActiveUnits } = await supabase
         .from('m_units')
-        .select('id', { count: 'exact', head: true })
-        .eq('is_active', true)
-        .neq('code', 'ADMIN');
+        .select('id, code, name')
+        .eq('is_active', true);
 
-      const totalUnits = (unitId && unitId !== 'all') ? 1 : (totalUnitsCount || 0);
+      const validUnits = (rawActiveUnits || []).filter((u: any) => {
+        const code = String(u.code || '').toUpperCase();
+        const name = String(u.name || '').toUpperCase();
+        return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN');
+      });
+
+      const totalUnits = (unitId && unitId !== 'all') ? 1 : validUnits.length;
 
       const empDataMap = this.groupAssessmentsByEmployee(assessments);
       const assessedEmployeeIds = Array.from(empDataMap.keys());
@@ -530,15 +542,20 @@ export class DashboardService {
       // 1. Get total display employees per unit
       const { data: unitEmpsCount } = await supabase
         .from('m_employees')
-        .select('unit_id, m_units(name)')
+        .select('unit_id, m_units(name, code)')
         .eq('is_active', true)
         .neq('role', 'superadmin')
 
       for (const e of (unitEmpsCount || []) as any[]) {
         if (!e.unit_id) continue
+        const u = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units
+        const code = String(u?.code || '').toUpperCase()
+        const name = String(u?.name || '').toUpperCase()
+        if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) continue
+
         if (!unitDataMap.has(e.unit_id)) {
           unitDataMap.set(e.unit_id, {
-            name: (e.m_units as any)?.name || 'Unknown',
+            name: u?.name || 'Unknown',
             employeeScores: new Map(),
             totalDisplayEmps: 0
           })

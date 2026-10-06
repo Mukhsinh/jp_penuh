@@ -126,7 +126,7 @@ function useAuth() {
 
         if (authUser) {
           const authRole = authUser.app_metadata?.role || authUser.user_metadata?.role
-          const isSuperAdmin = authRole === 'superadmin' || authUser.email === 'admin@sungaibahar.com'
+          const isSuperAdmin = authRole === 'superadmin' || authUser.email === 'admin@sungaipenuh.com'
           const role = isSuperAdmin ? 'superadmin' : (authRole || 'employee')
 
           const { data: emp } = await supabase

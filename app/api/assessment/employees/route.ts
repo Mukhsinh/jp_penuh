@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
       const isSuperAdmin =
         appRole === 'superadmin' ||
         userRole === 'superadmin' ||
-        email === 'admin@sungaibahar.com'
+        email === 'admin@sungaipenuh.com'
 
       if (isSuperAdmin) {
         currentEmployee = {
@@ -106,13 +106,18 @@ export async function GET(request: NextRequest) {
     const revenueType = searchParams.get('revenue_type') || 'bpjs'
     let employeesData: AssessmentStatus[] = []
 
-    // 1. Get SUPERADMIN unit ID to exclude
-    const { data: adminUnit } = await adminClient
+    // 1. Get SUPERADMIN unit IDs to exclude
+    const { data: rawUnits } = await adminClient
       .from('m_units')
-      .select('id')
-      .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
-      .maybeSingle()
-    const adminUnitId = adminUnit?.id
+      .select('id, code, name')
+
+    const adminUnitIds = (rawUnits || [])
+      .filter((u: any) => {
+        const code = String(u.code || '').toUpperCase()
+        const name = String(u.name || '').toUpperCase()
+        return code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')
+      })
+      .map((u: any) => u.id)
 
     let empQuery = adminClient
       .from('m_employees')
@@ -122,15 +127,16 @@ export async function GET(request: NextRequest) {
           unit_id,
           role,
           m_units!inner (
-            name
+            name,
+            code
           )
         `)
       .eq('is_active', true)
       .neq('role', 'superadmin')
 
     // Exclude SUPERADMIN unit
-    if (adminUnitId) {
-      empQuery = empQuery.neq('unit_id', adminUnitId)
+    if (adminUnitIds.length > 0) {
+      empQuery = empQuery.not('unit_id', 'in', `(${adminUnitIds.join(',')})`)
     }
 
     if (userRole === 'unit_manager' && userUnitId) {

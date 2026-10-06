@@ -187,7 +187,7 @@ async function generatePDFReport(unit: any, categories: any[], appSettings: any,
     doc.setFont('helvetica', 'normal')
     doc.setTextColor(71, 85, 105)
     doc.text(appSettings.address || 'Kabupaten Muaro Jambi, Provinsi Jambi', centerX, 26, { align: 'center' })
-    doc.text('Email: admin@sungaibahar.com | Dokumen Resmi Sistem JASPEL', centerX, 31, { align: 'center' })
+    doc.text('Email: admin@sungaipenuh.com | Dokumen Resmi Sistem JASPEL', centerX, 31, { align: 'center' })
 
     doc.setDrawColor(15, 23, 42)
     doc.setLineWidth(0.8)

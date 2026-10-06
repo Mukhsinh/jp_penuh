@@ -25,7 +25,7 @@ async function getUserEmployee(adminClient: any, user: any) {
   const isSuperAdmin =
     user.app_metadata?.role === 'superadmin' ||
     user.user_metadata?.role === 'superadmin' ||
-    user.email === 'admin@sungaibahar.com'
+    user.email === 'admin@sungaipenuh.com'
 
   if (isSuperAdmin) {
     return { id: user.id, role: 'superadmin', unit_id: '0' }

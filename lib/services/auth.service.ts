@@ -29,7 +29,7 @@ export type UserRole = 'superadmin' | 'unit_manager' | 'employee'
 class AuthService {
   // Consistent superadmin check used across all methods
   private isSuperadminEmail(email?: string): boolean {
-    return email === 'admin@sungaibahar.com'
+    return email === 'admin@sungaipenuh.com'
   }
 
   async signIn(email: string, password: string): Promise<LoginResult> {

@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     const isSuperAdmin =
       appRole === 'superadmin' ||
       userRole === 'superadmin' ||
-      authUser.email === 'admin@sungaibahar.com'
+      authUser.email === 'admin@sungaipenuh.com'
 
     if (!isSuperAdmin) {
       return NextResponse.json(

@@ -976,11 +976,11 @@ export async function generateUserListPDF(users: any[]): Promise<Uint8Array> {
     styles: { fontSize: 8, cellPadding: 3 },
     columnStyles: {
       0: { cellWidth: 10 },
-      1: { cellWidth: 35 },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 40 },
-      4: { cellWidth: 30 },
-      5: { cellWidth: 25 }
+      1: { cellWidth: 52 },
+      2: { cellWidth: 45 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 23 },
+      5: { cellWidth: 20 }
     }
   })
 

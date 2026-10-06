@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
         }
 
         const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
-        const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaibahar.com'
+        const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com'
 
         if (!employee) {
             if (isSuperAdmin) {

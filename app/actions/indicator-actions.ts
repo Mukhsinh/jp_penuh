@@ -108,7 +108,7 @@ export async function updateIndicator(id: string, formData: Partial<IndicatorFor
             return { success: false, error: 'Employee not found or inactive' }
         }
 
-        const isSuperadmin = employee.role === 'superadmin' || user.email === 'admin@sungaibahar.com'
+        const isSuperadmin = employee.role === 'superadmin' || user.email === 'admin@sungaipenuh.com'
         const isManager = employee.role === 'unit_manager'
 
         if (!isSuperadmin && !isManager) {

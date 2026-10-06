@@ -26,7 +26,7 @@ export interface UserWithPegawai {
   } | null
 }
 
-const SUPERADMIN_EMAIL = 'admin@sungaibahar.com'
+const SUPERADMIN_EMAIL = 'admin@sungaipenuh.com'
 
 /**
  * Server action to get users from m_employees joined with auth
@@ -188,7 +188,7 @@ export async function exportUserListToPDF(searchTerm: string = '', roleFilter: s
     if (error) throw new Error(error)
 
     const formattedData = users.map(u => ({
-      username: u.role === 'superadmin' ? 'admin' : (u.email.split('@')[0]),
+      username: u.email || (u.pegawai?.employee_code ? `${u.pegawai.employee_code.toLowerCase()}@sungaipenuh.com` : '-'),
       display_name: u.pegawai?.full_name || '-',
       unit_name: u.unit?.name || '-',
       unit_code: u.unit?.code || '-',

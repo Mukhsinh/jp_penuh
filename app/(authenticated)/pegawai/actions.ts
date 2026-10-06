@@ -67,13 +67,23 @@ export async function getPegawaiWithUnits(
       return { data: [], count: 0, error: error.message }
     }
 
+    // Filter out superadmin role AND superadmin unit employees
+    const filteredRows = (data || []).filter((item: any) => {
+      if (item.role === 'superadmin') return false
+      const unit = Array.isArray(item.m_units) ? item.m_units[0] : item.m_units
+      const code = String(unit?.code || '').toUpperCase()
+      const name = String(unit?.name || '').toUpperCase()
+      if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+      return true
+    })
+
     // Transform data to match Pegawai type
-    const transformedData: Pegawai[] = (data || []).map((item: any) => ({
+    const transformedData: Pegawai[] = filteredRows.map((item: any) => ({
       ...item,
       m_units: item.m_units || undefined
     }))
 
-    return { data: transformedData, count: count || 0 }
+    return { data: transformedData, count: filteredRows.length }
   } catch (err: any) {
     console.error('getPegawaiWithUnits error:', err)
     return { data: [], count: 0, error: err.message || 'Terjadi kesalahan' }
@@ -100,7 +110,7 @@ export async function createPegawai(data: CreatePegawaiData) {
     // Log data for debugging
     console.log('Creating employee with data:', data, 'using taxType:', taxType)
 
-    const fallbackEmail = `${data.employee_code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaibahar.local`
+    const fallbackEmail = `${data.employee_code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaipenuh.local`
     const finalEmail = data.email?.trim() || fallbackEmail
 
     const { data: newPegawai, error } = await supabase
@@ -150,7 +160,7 @@ export async function updatePegawai(id: string, data: UpdatePegawaiData): Promis
     // Verify user is superadmin
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaibahar.com'
+    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
     const isUnitManager = authRole === 'unit_manager'
 
     if (!user || (!isSuperAdmin && !isUnitManager)) {
@@ -161,7 +171,7 @@ export async function updatePegawai(id: string, data: UpdatePegawaiData): Promis
     const adminSupabase = await createAdminClient()
 
     const code = data.employee_code || ''
-    const fallbackEmail = `${code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaibahar.local`
+    const fallbackEmail = `${code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaipenuh.local`
     const finalEmail = data.email?.trim() || fallbackEmail
 
     // If unit manager, ensure they only update employees in their unit
@@ -217,7 +227,7 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
     // Verify user is superadmin
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaibahar.com'
+    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
     const isUnitManager = authRole === 'unit_manager'
 
     if (!user || (!isSuperAdmin && !isUnitManager)) {
@@ -268,16 +278,15 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
     const isSuperAdmin =
       appRole === 'superadmin' ||
       userRole === 'superadmin' ||
-      email === 'admin@sungaibahar.com'
+      email === 'admin@sungaipenuh.com'
 
     // Use admin client for superadmin to bypass RLS
     const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
     const { data, error } = await fetchClient
       .from('m_units')
-      .select('id, name')
+      .select('id, name, code')
       .eq('is_active', true)
-      .neq('code', 'ADMIN')
       .order('name')
 
     if (error) {
@@ -285,7 +294,13 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
       return { data: [], error: error.message }
     }
 
-    return { data: data || [] }
+    const filteredData = (data || []).filter(u => {
+      const code = String(u.code || '').toUpperCase()
+      const name = String(u.name || '').toUpperCase()
+      return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
+    })
+
+    return { data: filteredData }
   } catch (err: any) {
     console.error('getUnitsForDropdown error:', err)
     return { data: [], error: err.message || 'Terjadi kesalahan' }
@@ -325,12 +340,20 @@ export async function getPegawaiStats(unitId?: string): Promise<{
 
     if (error) throw error
 
-    const total = data.length
+    // Exclude superadmin unit employees
+    const validEmps = (data || []).filter(p => {
+      const u = Array.isArray(p.m_units) ? p.m_units[0] : p.m_units
+      const code = String(u?.code || '').toUpperCase()
+      const name = String(u?.name || '').toUpperCase()
+      return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
+    })
+
+    const total = validEmps.length
     const gradeMap = new Map<string, number>()
     const statusMap = new Map<string, number>()
     const unitMap = new Map<string, number>()
 
-    data.forEach(p => {
+    validEmps.forEach(p => {
       // Grade stats
       const grade = p.pns_grade || 'Non-PNS'
       gradeMap.set(grade, (gradeMap.get(grade) || 0) + 1)

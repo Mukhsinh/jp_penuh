@@ -21,7 +21,7 @@ export async function GET() {
     const isSuperAdmin =
       appRole === 'superadmin' ||
       userRole === 'superadmin' ||
-      authUser.email === 'admin@sungaibahar.com'
+      authUser.email === 'admin@sungaipenuh.com'
 
     if (!isSuperAdmin) {
       return NextResponse.json(

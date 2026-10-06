@@ -28,7 +28,7 @@ async function findEmployeeForUser(adminClient: any, userId: string, authUser: a
   const userMeta = authUser.user_metadata || {}
   const appMeta = authUser.app_metadata || {}
   const rawRole = (appMeta.role || userMeta.role || '').toString().toLowerCase()
-  const isSuperAdmin = rawRole === 'superadmin' || rawRole === 'admin' || authUser.email === 'admin@sungaibahar.com'
+  const isSuperAdmin = rawRole === 'superadmin' || rawRole === 'admin' || authUser.email === 'admin@sungaipenuh.com'
 
   // 2. Try by user_id first
   const { data: employeeData } = await adminClient

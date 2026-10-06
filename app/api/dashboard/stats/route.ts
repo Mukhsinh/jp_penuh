@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       .maybeSingle()
 
     const authRole = user.app_metadata?.role || user.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
+    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaipenuh.com'
 
     if (!employee && isSuperAdmin) {
       employee = { role: 'superadmin', unit_id: '0' } as any

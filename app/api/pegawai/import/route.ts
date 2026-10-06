@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
         const existingEmp = employeeByCode.get(employeeCode.toLowerCase())
 
         // Generate fallback email to satisfy NOT NULL column constraint
-        const fallbackEmail = `${employeeCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaibahar.local`
+        const fallbackEmail = `${employeeCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaipenuh.local`
         const finalEmail = email || existingEmp?.email || fallbackEmail
 
         // Build employee data object
