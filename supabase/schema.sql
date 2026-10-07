@@ -78,6 +78,12 @@ CREATE TABLE t_pool (
   net_pool DECIMAL(18,2) GENERATED ALWAYS AS (revenue_total - deduction_total) STORED,
   global_allocation_percentage DECIMAL(5,2) NOT NULL DEFAULT 100.00 CHECK (global_allocation_percentage >= 0 AND global_allocation_percentage <= 100),
   allocated_amount DECIMAL(18,2) GENERATED ALWAYS AS ((revenue_total - deduction_total) * global_allocation_percentage / 100) STORED,
+  revenue_bpjs DECIMAL(18,2) DEFAULT 0.00,
+  revenue_umum DECIMAL(18,2) DEFAULT 0.00,
+  allocation_percentage_bpjs DECIMAL(5,2) DEFAULT 100.00,
+  allocation_percentage_umum DECIMAL(5,2) DEFAULT 100.00,
+  allocated_bpjs DECIMAL(18,2) DEFAULT 0.00,
+  allocated_umum DECIMAL(18,2) DEFAULT 0.00,
   status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'distributed')),
   approved_by UUID REFERENCES m_employees(id),
   approved_at TIMESTAMPTZ,
@@ -90,8 +96,12 @@ CREATE TABLE t_pool (
 CREATE TABLE t_pool_revenue (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   pool_id UUID NOT NULL REFERENCES t_pool(id) ON DELETE CASCADE,
+  revenue_code VARCHAR(10),
+  revenue_type VARCHAR(50),
+  category VARCHAR(50),
   description VARCHAR(255) NOT NULL,
   amount DECIMAL(18,2) NOT NULL,
+  patient_count INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -103,6 +113,24 @@ CREATE TABLE t_pool_deduction (
   amount DECIMAL(18,2) NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Enable RLS and create policies for Pool tables
+ALTER TABLE t_pool ENABLE ROW LEVEL SECURITY;
+ALTER TABLE t_pool_revenue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE t_pool_deduction ENABLE ROW LEVEL SECURITY;
+
+GRANT ALL ON t_pool TO authenticated, anon, service_role;
+GRANT ALL ON t_pool_revenue TO authenticated, anon, service_role;
+GRANT ALL ON t_pool_deduction TO authenticated, anon, service_role;
+
+DROP POLICY IF EXISTS "Allow all for authenticated on t_pool" ON t_pool;
+CREATE POLICY "Allow all for authenticated on t_pool" ON t_pool FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for authenticated on t_pool_revenue" ON t_pool_revenue;
+CREATE POLICY "Allow all for authenticated on t_pool_revenue" ON t_pool_revenue FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow all for authenticated on t_pool_deduction" ON t_pool_deduction;
+CREATE POLICY "Allow all for authenticated on t_pool_deduction" ON t_pool_deduction FOR ALL TO public USING (true) WITH CHECK (true);
 
 -- KPI Realization (Input data per employee per indicator)
 CREATE TABLE t_realization (
