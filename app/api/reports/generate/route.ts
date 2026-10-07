@@ -533,7 +533,7 @@ export async function POST(request: NextRequest) {
  * Bruto = Skor_Individu × PIR
  * Netto = Bruto - PPh21
  */
-export async function generateIncentiveReport(supabase: any, period: string, unitId?: string, employeeId?: string, revenueType: string = 'all') {
+async function generateIncentiveReport(supabase: any, period: string, unitId?: string, employeeId?: string, revenueType: string = 'all') {
   // 1. Get Pool
   const { data: poolData, error: poolError } = await supabase
     .from('t_pool')

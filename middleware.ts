@@ -8,6 +8,8 @@ import {
 } from '@/lib/services/route-config.service'
 import type { Role } from '@/lib/services/rbac.service'
 
+import { decodeJwtPayload, extractTokenFromCookies } from '@/lib/supabase/auth-helper'
+
 // OPTIMIZED: LRU Cache with better memory management
 class LRUCache<T> {
   private cache = new Map<string, { value: T; timestamp: number }>()
@@ -129,19 +131,24 @@ export async function middleware(request: NextRequest) {
     let { data: { user }, error: userError } = await supabase.auth.getUser()
 
     if (userError) {
-      if (!userError.message.includes('Refresh Token Not Found')) {
+      const status = (userError as any)?.status
+      const isRateLimit = status === 429 || (userError.message || '').toLowerCase().includes('rate limit')
+
+      if (!userError.message?.includes('Refresh Token Not Found') && !isRateLimit) {
         console.warn('[MIDDLEWARE] Auth check getUser error:', userError.message)
       }
 
-      // Fallback: If getUser implies a rate limit or internal server fail (not an explicitly rejected token),
-      // verify using local JWT session to save the user from suddenly getting logged out.
-      const status = (userError as any)?.status
-      if (status === 429 || status >= 500) {
-        const { data: sessionData } = await supabase.auth.getSession()
-        if (sessionData && sessionData.session && sessionData.session.user) {
-          user = sessionData.session.user
-          userError = null
-          console.log('[MIDDLEWARE] Fallback to getSession succeeded despite rate limit.')
+      // Fallback: Verify using local JWT decoding if Supabase Cloud API hits a rate limit (429) or 5xx server fail
+      if (isRateLimit || (status && status >= 500)) {
+        const cookieHeader = request.headers.get('cookie')
+        const token = extractTokenFromCookies(cookieHeader, request.cookies.getAll())
+        if (token) {
+          const decodedUser = decodeJwtPayload(token)
+          if (decodedUser) {
+            user = decodedUser as any
+            userError = null
+            console.log('[MIDDLEWARE] Fallback to decoded local JWT succeeded despite rate limit.')
+          }
         }
       }
     }

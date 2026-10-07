@@ -6,8 +6,9 @@ import { cache } from 'react'
  * Safely decodes a Supabase Auth JWT token payload without network calls.
  * Used as a fallback when Supabase Cloud Auth API hits 429 Rate Limits.
  */
-function decodeJwtPayload(token: string) {
+export function decodeJwtPayload(token: string) {
     try {
+        if (!token) return null
         const parts = token.split('.')
         if (parts.length !== 3) return null
         const base64Url = parts[1]
@@ -16,6 +17,11 @@ function decodeJwtPayload(token: string) {
         const payload = JSON.parse(jsonPayload)
 
         if (!payload.sub) return null
+
+        // Expiration check
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+            return null
+        }
 
         return {
             id: payload.sub,
@@ -32,7 +38,7 @@ function decodeJwtPayload(token: string) {
 /**
  * Extracts raw access token from request cookies, including chunked Supabase SSR cookies
  */
-function extractTokenFromCookies(cookieHeader?: string | null, cookieStoreAll?: Array<{ name: string; value: string }>) {
+export function extractTokenFromCookies(cookieHeader?: string | null, cookieStoreAll?: Array<{ name: string; value: string }>) {
     const parseRawToken = (tokenStr: string) => {
         if (!tokenStr) return null
         let str = tokenStr
@@ -120,74 +126,36 @@ function extractTokenFromCookies(cookieHeader?: string | null, cookieStoreAll?: 
  */
 export const getCachedUser = cache(async () => {
     try {
-        const supabase = await createClient()
-        return await getAuthenticatedUser(supabase)
+        return await getAuthenticatedUser()
     } catch {
         return null
     }
 })
 
 /**
- * Robustly retrieves the authenticated user for API routes.
- * Prevents false 401 Unauthorized errors caused by concurrent token refresh race conditions (429 Too Many Requests).
+ * Robustly retrieves the authenticated user for API routes & layouts.
+ * Prioritizes local JWT token decoding to eliminate 429 (Request rate limit reached) errors entirely.
  */
-export async function getAuthenticatedUser(supabase: any, request?: Request) {
-    // Attempt 1: Standard getUser()
-    try {
-        const { data: { user }, error } = await supabase.auth.getUser()
-        if (user && !error) return user
-    } catch (e) {
-        // ignore
-    }
-
-    // Attempt 2: getSession() fallback
-    try {
-        const { data: { session } } = await supabase.auth.getSession()
-        if (session?.user) return session.user
-    } catch (e) {
-        // ignore
-    }
-
-    // Attempt 3: Authorization header fallback via Admin Client
-    if (request) {
-        const authHeader = request.headers.get('Authorization') || request.headers.get('authorization')
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            if (token) {
-                try {
-                    const adminClient = await createAdminClient()
-                    const { data: { user } } = await adminClient.auth.getUser(token)
-                    if (user) return user
-                } catch (e) {
-                    // Fallback to local JWT decode
-                    const decoded = decodeJwtPayload(token)
-                    if (decoded) return decoded
-                }
-            }
-        }
-    }
-
-    // Attempt 4: Local JWT decoding from request cookies (Bypasses Supabase Cloud 429 Rate Limits entirely)
+export async function getAuthenticatedUser(supabase?: any, request?: Request) {
+    // Attempt 1: Fast local JWT decoding from cookies or Authorization header (0ms network cost)
     try {
         let cookieStoreAll: Array<{ name: string; value: string }> = []
         try {
             const cookieStore = await cookies()
             cookieStoreAll = cookieStore.getAll()
         } catch (e) {
-            // ignore if outside Next.js async storage context
+            // ignore if outside Next.js cookies context
         }
 
         const cookieHeader = request?.headers?.get('cookie')
-        const token = extractTokenFromCookies(cookieHeader, cookieStoreAll)
-        if (token) {
-            try {
-                const adminClient = await createAdminClient()
-                const { data: { user } } = await adminClient.auth.getUser(token)
-                if (user) return user
-            } catch (e) {
-                // ignore and use decodeJwtPayload
-            }
+        const authHeader = request?.headers?.get('Authorization') || request?.headers?.get('authorization')
+        let token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace(/^Bearer\s+/i, '').trim() : null
 
+        if (!token) {
+            token = extractTokenFromCookies(cookieHeader, cookieStoreAll)
+        }
+
+        if (token) {
             const decodedUser = decodeJwtPayload(token)
             if (decodedUser) {
                 return decodedUser
@@ -195,6 +163,31 @@ export async function getAuthenticatedUser(supabase: any, request?: Request) {
         }
     } catch (e) {
         // ignore
+    }
+
+    // Attempt 2: Standard getUser() via Supabase client (only if local JWT decoding wasn't sufficient)
+    if (supabase) {
+        try {
+            const { data: { user }, error } = await supabase.auth.getUser()
+            if (user && !error) return user
+        } catch (e) {
+            // ignore
+        }
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession()
+            if (session?.user) return session.user
+        } catch (e) {
+            // ignore
+        }
+    } else {
+        try {
+            const serverClient = await createClient()
+            const { data: { user }, error } = await serverClient.auth.getUser()
+            if (user && !error) return user
+        } catch (e) {
+            // ignore
+        }
     }
 
     return null

@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Sidebar from '@/components/navigation/Sidebar'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -10,9 +9,7 @@ export default async function AuthenticatedLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createClient()
-
-  // Verify session safely using request-level cache to prevent AuthApiError 429
+  // Verify session safely using request-level cache & local JWT decoding to prevent AuthApiError 429
   const user = await getCachedUser()
 
   if (!user) {
