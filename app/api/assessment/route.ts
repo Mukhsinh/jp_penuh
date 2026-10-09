@@ -93,7 +93,11 @@ async function getAssessmentsForEmployee(adminClient: any, employeeId: string, p
   return data || []
 }
 
-async function upsertAssessment(adminClient: any, assessment: Assessment): Promise<Assessment> {
+async function upsertAssessment(
+  adminClient: any,
+  assessment: Assessment,
+  existingMap?: Map<string, string>
+): Promise<Assessment> {
   const achievement = assessment.achievement_percentage !== undefined
     ? assessment.achievement_percentage
     : (assessment.target_value === 0 ? 100 : (assessment.realization_value / assessment.target_value) * 100)
@@ -107,18 +111,23 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
   // Look up existing assessment ID for this exact revenue_type if ID not provided
   let existingId = assessment.id
   if (!existingId) {
-    const { data: existingRows } = await adminClient
-      .from('t_kpi_assessments')
-      .select('id')
-      .eq('employee_id', assessment.employee_id)
-      .eq('indicator_id', assessment.indicator_id)
-      .eq('period', assessment.period)
-      .eq('revenue_type', revType)
-      .is('sub_indicator_id', null)
-      .limit(1)
+    const mainKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:main`
+    if (existingMap && existingMap.has(mainKey)) {
+      existingId = existingMap.get(mainKey)
+    } else {
+      const { data: existingRows } = await adminClient
+        .from('t_kpi_assessments')
+        .select('id')
+        .eq('employee_id', assessment.employee_id)
+        .eq('indicator_id', assessment.indicator_id)
+        .eq('period', assessment.period)
+        .eq('revenue_type', revType)
+        .is('sub_indicator_id', null)
+        .limit(1)
 
-    if (existingRows && existingRows.length > 0) {
-      existingId = existingRows[0].id
+      if (existingRows && existingRows.length > 0) {
+        existingId = existingRows[0].id
+      }
     }
   }
 
@@ -182,18 +191,23 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
 
       let subExistingId = sub.id
       if (!subExistingId) {
-        const { data: existingSubRows } = await adminClient
-          .from('t_kpi_assessments')
-          .select('id')
-          .eq('employee_id', assessment.employee_id)
-          .eq('indicator_id', assessment.indicator_id)
-          .eq('sub_indicator_id', sub.sub_indicator_id)
-          .eq('period', assessment.period)
-          .eq('revenue_type', revType)
-          .limit(1)
+        const subKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:${sub.sub_indicator_id}`
+        if (existingMap && existingMap.has(subKey)) {
+          subExistingId = existingMap.get(subKey)
+        } else {
+          const { data: existingSubRows } = await adminClient
+            .from('t_kpi_assessments')
+            .select('id')
+            .eq('employee_id', assessment.employee_id)
+            .eq('indicator_id', assessment.indicator_id)
+            .eq('sub_indicator_id', sub.sub_indicator_id)
+            .eq('period', assessment.period)
+            .eq('revenue_type', revType)
+            .limit(1)
 
-        if (existingSubRows && existingSubRows.length > 0) {
-          subExistingId = existingSubRows[0].id
+          if (existingSubRows && existingSubRows.length > 0) {
+            subExistingId = existingSubRows[0].id
+          }
         }
       }
 
@@ -395,6 +409,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Periode ${samplePeriod} belum memiliki pool pendapatan` }, { status: 400 })
     }
 
+    // Optimization: Batch fetch employee details & unit information
+    const uniqueEmpIds = Array.from(new Set(itemsToProcess.map((i: any) => i.employee_id).filter(Boolean)))
+    const { data: targetEmps } = await adminClient
+      .from('m_employees')
+      .select('id, unit_id, m_units(kpi_schema_mode)')
+      .in('id', uniqueEmpIds)
+
+    const empUnitMap = new Map((targetEmps || []).map((e: any) => [e.id, e]))
+
+    // Optimization: Batch fetch existing assessment IDs for this period to eliminate N+1 queries
+    const { data: existingRecords } = await adminClient
+      .from('t_kpi_assessments')
+      .select('id, employee_id, indicator_id, sub_indicator_id, period, revenue_type')
+      .in('employee_id', uniqueEmpIds)
+      .eq('period', samplePeriod)
+
+    const existingMap = new Map<string, string>()
+    existingRecords?.forEach((r: any) => {
+      const subKey = r.sub_indicator_id ? r.sub_indicator_id : 'main'
+      const key = `${r.employee_id}:${r.indicator_id}:${r.period}:${r.revenue_type || 'bpjs'}:${subKey}`
+      existingMap.set(key, r.id)
+    })
+
     const results = []
     for (const item of itemsToProcess) {
       const assessmentItem: Assessment = {
@@ -402,31 +439,20 @@ export async function POST(request: NextRequest) {
         assessor_id: currentEmployee.id
       }
 
-      // Basic authorization for each item if manager
+      // Authorization check using in-memory empUnitMap
       if (currentEmployee.role === 'unit_manager') {
-        const { data: targetEmployee } = await adminClient
-          .from('m_employees')
-          .select('unit_id')
-          .eq('id', assessmentItem.employee_id)
-          .single()
-
-        if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
+        const empData = empUnitMap.get(assessmentItem.employee_id)
+        if (!empData || empData.unit_id !== currentEmployee.unit_id) {
           continue // Skip unauthorized items
         }
       }
 
-      const saved = await upsertAssessment(adminClient, assessmentItem)
+      const saved = await upsertAssessment(adminClient, assessmentItem, existingMap)
       results.push(saved)
 
       // If applyToUmum is enabled and current item is for bpjs, also copy to 'umum'
       if (applyToUmum && (assessmentItem.revenue_type === 'bpjs' || !assessmentItem.revenue_type)) {
-        // Fetch unit schema mode for this employee
-        const { data: empUnitData } = await adminClient
-          .from('m_employees')
-          .select('unit_id, m_units(kpi_schema_mode)')
-          .eq('id', assessmentItem.employee_id)
-          .maybeSingle()
-
+        const empUnitData = empUnitMap.get(assessmentItem.employee_id)
         const uData = Array.isArray(empUnitData?.m_units) ? empUnitData.m_units[0] : empUnitData?.m_units
         const schemaMode = uData?.kpi_schema_mode || 'same'
 
@@ -479,7 +505,7 @@ export async function POST(request: NextRequest) {
                   revenue_type: 'umum',
                   sub_assessments: mappedSubAssessments?.map((s: any) => ({ ...s, id: undefined }))
                 }
-                const savedUmum = await upsertAssessment(adminClient, copyItem)
+                const savedUmum = await upsertAssessment(adminClient, copyItem, existingMap)
                 results.push(savedUmum)
               }
             }
@@ -492,7 +518,7 @@ export async function POST(request: NextRequest) {
             revenue_type: 'umum',
             sub_assessments: assessmentItem.sub_assessments?.map((s: any) => ({ ...s, id: undefined }))
           }
-          const savedUmum = await upsertAssessment(adminClient, copyItem)
+          const savedUmum = await upsertAssessment(adminClient, copyItem, existingMap)
           results.push(savedUmum)
         }
       }

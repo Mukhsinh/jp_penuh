@@ -556,17 +556,16 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
   let netPool = Number(poolData.revenue_total || poolData.net_pool || 0);
   if (revenueType === 'bpjs') {
-    netPool = Number(poolData.revenue_bpjs || poolData.allocated_bpjs || poolData.net_pool || 0);
+    netPool = Number(poolData.allocated_bpjs || poolData.revenue_bpjs || poolData.net_pool || 0);
   } else if (revenueType === 'umum') {
-    netPool = Number(poolData.revenue_umum || poolData.allocated_umum || poolData.net_pool || 0);
+    netPool = Number(poolData.allocated_umum || poolData.revenue_umum || poolData.net_pool || 0);
   }
 
   // 2. Fetch active employees (filtered by unit/employee if specified)
-  // 2. Fetch all employees (including inactive if they have assessments)
-  // We remove is_active check because if they have assessments in this period, they should be in the report
   let empQuery = supabase
     .from('m_employees')
-    .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, kpi_schema_mode)')
+    .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, use_same_proportion, kpi_schema_mode)')
+    .eq('is_active', true)
     .neq('role', 'superadmin')
 
   if (employeeId && employeeId !== 'all') {
@@ -1121,10 +1120,13 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     // Determine Style
     const unitName = unitData?.name || '-'
     const isMedical = isMedicalUnit(uId, unitName)
+    const propUmumVal = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
+      ? unitData?.proportion_percentage
+      : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
     const unitProp = parseFloat(
       revenueType === 'umum'
-        ? (unitData?.proportion_umum_percentage ?? unitData?.proportion_percentage ?? '0')
-        : (unitData?.proportion_percentage || '0')
+        ? String(propUmumVal || '0')
+        : String(unitData?.proportion_percentage || '0')
     )
     const totalSkorUnit = unitTotalScoresMap.get(uId) || 0
     const empCount = unitEmployeeCountMap.get(uId) || 0
@@ -1227,7 +1229,14 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
     const uId = unitData?.id
     const unitName = unitData?.name || '-'
-    const unitProp = parseFloat(unitData?.proportion_percentage || '0')
+    const rowPropUmum = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
+      ? unitData?.proportion_percentage
+      : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
+    const unitProp = parseFloat(
+      revenueType === 'umum'
+        ? String(rowPropUmum || '0')
+        : String(unitData?.proportion_percentage || '0')
+    )
     const pir = uId ? (unitPIRMap.get(uId) || 0) : 0
     const totalSkorUnit = uId ? (unitTotalScoresMap.get(uId) || 0) : 0
 

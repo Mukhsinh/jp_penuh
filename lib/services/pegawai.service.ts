@@ -1,6 +1,11 @@
 import { createClient } from '@/lib/supabase/client'
 import type { Pegawai, CreatePegawaiData, UpdatePegawaiData } from '@/lib/types/database.types'
-import { createPegawai as createPegawaiAction, updatePegawai as updatePegawaiAction } from '@/app/(authenticated)/pegawai/actions'
+import {
+  createPegawai as createPegawaiAction,
+  updatePegawai as updatePegawaiAction,
+  activatePegawai as activatePegawaiAction,
+  deactivatePegawai as deactivatePegawaiAction
+} from '@/app/(authenticated)/pegawai/actions'
 
 /**
  * Get all pegawai with pagination and search
@@ -126,28 +131,26 @@ export async function updatePegawai(
 }
 
 /**
+ * Activate a pegawai
+ */
+export async function activatePegawai(
+  id: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    return await activatePegawaiAction(id)
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+}
+
+/**
  * Deactivate a pegawai
  */
 export async function deactivatePegawai(
   id: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = createClient()
-
-    // Update pegawai record
-    const { error } = await supabase
-      .from('m_employees')
-      .update({
-        is_active: false,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-
-    if (error) {
-      return { success: false, error: error.message }
-    }
-
-    return { success: true }
+    return await deactivatePegawaiAction(id)
   } catch (err: any) {
     return { success: false, error: err.message }
   }

@@ -128,9 +128,9 @@ export default function PegawaiPage() {
     }>;
   } | null>(null)
 
-  const pageSize = 50
+  const [pageSize, setPageSize] = useState<number>(50)
   const debouncedSearchTerm = useDebounce(searchTerm, 500)
-  const totalPages = Math.ceil(totalCount / pageSize)
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   const loadPegawai = useCallback(async () => {
     setLoading(true)
@@ -732,36 +732,59 @@ export default function PegawaiPage() {
             onRefresh={loadPegawai}
           />
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 mt-8">
+          {/* Pagination Controls */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-gray-100">
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-500 font-medium">Tampilkan:</span>
+              <Select
+                value={String(pageSize)}
+                onValueChange={(val) => {
+                  setPageSize(Number(val))
+                  setCurrentPage(1)
+                }}
+              >
+                <SelectTrigger className="h-8 w-28 bg-gray-50 border-gray-200 text-xs">
+                  <SelectValue placeholder="Baris" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="50">50 baris</SelectItem>
+                  <SelectItem value="100">100 baris</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-gray-500">
+                Menampilkan {totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0} - {Math.min(currentPage * pageSize, totalCount)} dari {totalCount} pegawai
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="h-9"
+                disabled={currentPage === 1 || loading}
+                className="h-8 text-xs px-3"
               >
                 Sebelumnya
               </Button>
-              <div className="flex items-center gap-1 mx-2">
-                <span className="text-sm font-bold text-gray-900 px-3 py-1 bg-gray-100 rounded-md">
+              <div className="flex items-center gap-1 mx-1">
+                <span className="text-xs font-bold text-gray-900 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-100">
                   {currentPage}
                 </span>
-                <span className="text-sm text-gray-500">
-                  dari {totalPages}
+                <span className="text-xs text-gray-500">
+                  / {totalPages}
                 </span>
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="h-9"
+                disabled={currentPage >= totalPages || loading}
+                className="h-8 text-xs px-3"
               >
                 Selanjutnya
               </Button>
             </div>
-          )}
+          </div>
         </CardContent>
       </Card>
 

@@ -83,7 +83,7 @@ export async function getPegawaiWithUnits(
       m_units: item.m_units || undefined
     }))
 
-    return { data: transformedData, count: filteredRows.length }
+    return { data: transformedData, count: count || 0 }
   } catch (err: any) {
     console.error('getPegawaiWithUnits error:', err)
     return { data: [], count: 0, error: err.message || 'Terjadi kesalahan' }
@@ -254,6 +254,94 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
     return { success: true }
   } catch (err: any) {
     console.error('deletePegawai error:', err)
+    return { success: false, error: err.message || 'Terjadi kesalahan' }
+  }
+}
+
+/**
+ * Server action to activate pegawai
+ */
+export async function activatePegawai(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+
+    // Verify user is superadmin or manager
+    const { data: { user } } = await supabase.auth.getUser()
+    const authRole = user?.app_metadata?.role || user?.user_metadata?.role
+    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
+    const isUnitManager = authRole === 'unit_manager'
+
+    if (!user || (!isSuperAdmin && !isUnitManager)) {
+      return { success: false, error: 'Tidak memiliki akses' }
+    }
+
+    const adminSupabase = await createAdminClient()
+    let updateQuery = adminSupabase
+      .from('m_employees')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (isUnitManager) {
+      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+    }
+
+    const { error } = await updateQuery
+
+    if (error) {
+      console.error('Activate error:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/pegawai')
+    revalidatePath('/assessment')
+    revalidatePath('/reports')
+    return { success: true }
+  } catch (err: any) {
+    console.error('activatePegawai error:', err)
+    return { success: false, error: err.message || 'Terjadi kesalahan' }
+  }
+}
+
+/**
+ * Server action to deactivate pegawai
+ */
+export async function deactivatePegawai(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+
+    // Verify user is superadmin or manager
+    const { data: { user } } = await supabase.auth.getUser()
+    const authRole = user?.app_metadata?.role || user?.user_metadata?.role
+    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
+    const isUnitManager = authRole === 'unit_manager'
+
+    if (!user || (!isSuperAdmin && !isUnitManager)) {
+      return { success: false, error: 'Tidak memiliki akses' }
+    }
+
+    const adminSupabase = await createAdminClient()
+    let updateQuery = adminSupabase
+      .from('m_employees')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (isUnitManager) {
+      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+    }
+
+    const { error } = await updateQuery
+
+    if (error) {
+      console.error('Deactivate error:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/pegawai')
+    revalidatePath('/assessment')
+    revalidatePath('/reports')
+    return { success: true }
+  } catch (err: any) {
+    console.error('deactivatePegawai error:', err)
     return { success: false, error: err.message || 'Terjadi kesalahan' }
   }
 }
