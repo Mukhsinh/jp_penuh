@@ -556,9 +556,9 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
   let netPool = Number(poolData.revenue_total || poolData.net_pool || 0);
   if (revenueType === 'bpjs') {
-    netPool = Number(poolData.allocated_bpjs || poolData.revenue_bpjs || poolData.net_pool || 0);
+    netPool = Number(poolData.revenue_bpjs || poolData.allocated_bpjs || poolData.net_pool || 0);
   } else if (revenueType === 'umum') {
-    netPool = Number(poolData.allocated_umum || poolData.revenue_umum || poolData.net_pool || 0);
+    netPool = Number(poolData.revenue_umum || poolData.allocated_umum || poolData.net_pool || 0);
   }
 
   // 2. Fetch active employees (filtered by unit/employee if specified)
