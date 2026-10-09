@@ -29,10 +29,10 @@ export default function AssessmentPageContent({
 }: AssessmentPageContentProps) {
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>('bpjs')
   const [availablePeriods, setAvailablePeriods] = useState<string[]>(availablePeriodsProp || [])
-  const [selectedPeriod, setSelectedPeriod] = useState<string>(availablePeriods[0] || '')
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('')
   const [employees, setEmployees] = useState<AssessmentStatus[]>([])
   const [filteredEmployees, setFilteredEmployees] = useState<AssessmentStatus[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
@@ -61,9 +61,6 @@ export default function AssessmentPageContent({
         const periodsData = await periodsRes.json()
         if (periodsData.success && periodsData.periods) {
           setAvailablePeriods(periodsData.periods)
-          if (!selectedPeriod && periodsData.periods.length > 0) {
-            setSelectedPeriod(periodsData.periods[0])
-          }
         }
       }
 
@@ -298,8 +295,8 @@ export default function AssessmentPageContent({
         <button
           onClick={() => setActiveRevenueType('bpjs')}
           className={`flex-1 py-2 px-4 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${activeRevenueType === 'bpjs'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 hover:bg-slate-200/60'
+            ? 'bg-blue-600 text-white shadow-md'
+            : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 hover:bg-slate-200/60'
             }`}
         >
           <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -308,8 +305,8 @@ export default function AssessmentPageContent({
         <button
           onClick={() => setActiveRevenueType('umum')}
           className={`flex-1 py-2 px-4 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${activeRevenueType === 'umum'
-              ? 'bg-amber-600 text-white shadow-md'
-              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 hover:bg-slate-200/60'
+            ? 'bg-amber-600 text-white shadow-md'
+            : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 hover:bg-slate-200/60'
             }`}
         >
           <span className="h-2.5 w-2.5 rounded-full bg-amber-300 animate-pulse" />
@@ -491,9 +488,24 @@ export default function AssessmentPageContent({
               </div>
 
               {/* Employee Table */}
-              {loading ? (
+              {!selectedPeriod ? (
+                <div className="flex flex-col items-center justify-center p-12 text-center border-2 border-dashed border-blue-200 rounded-[1.5rem] bg-blue-50/40 my-4">
+                  <div className="bg-blue-100 p-4 rounded-full mb-4 shadow-sm">
+                    <AlertCircle className="h-8 w-8 text-blue-600" />
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    Periode Penilaian Belum Dipilih
+                  </h3>
+                  <p className="text-sm text-gray-600 max-w-md mx-auto leading-relaxed mb-4">
+                    Penilaian KPI hanya dapat dilakukan setelah Anda memilih periode penilaian. Silakan pilih periode yang tersedia pada dropdown <strong>Periode Penilaian</strong> di atas.
+                  </p>
+                  <p className="text-xs text-slate-500 italic">
+                    * Catatan: Pilihan periode hanya menampilkan periode yang sudah terinput pool pendapatannya.
+                  </p>
+                </div>
+              ) : loading ? (
                 <div className="flex flex-col items-center justify-center p-12 text-gray-500">
-                  <Loader2 className="h-8 w-8 animate-spin mb-4" />
+                  <Loader2 className="h-8 w-8 animate-spin mb-4 text-blue-600" />
                   <p>Memuat data pegawai...</p>
                 </div>
               ) : filteredEmployees.length > 0 ? (

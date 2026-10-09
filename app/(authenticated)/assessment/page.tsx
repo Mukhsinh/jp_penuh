@@ -10,7 +10,7 @@ export const revalidate = 0
 
 async function getAvailablePeriods(supabase: any): Promise<string[]> {
   try {
-    // 1. Fetch periods from t_pool
+    // Fetch periods strictly from t_pool where pool revenue has been input
     const { data: poolData } = await supabase
       .from('t_pool')
       .select('period')
@@ -21,24 +21,10 @@ async function getAvailablePeriods(supabase: any): Promise<string[]> {
       if (item.period) periodsSet.add(item.period)
     })
 
-    // 2. Fetch distinct periods from t_kpi_assessments
-    const { data: assData } = await supabase
-      .from('t_kpi_assessments')
-      .select('period')
-      .limit(200)
-
-    assData?.forEach((item: any) => {
-      if (item.period) periodsSet.add(item.period)
-    })
-
-    // 3. Fallback: Always include current period (YYYY-MM)
-    const currentMonth = new Date().toISOString().slice(0, 7)
-    periodsSet.add(currentMonth)
-
     return Array.from(periodsSet).sort((a, b) => b.localeCompare(a))
   } catch (error) {
     console.error('Exception in getAvailablePeriods:', error)
-    return [new Date().toISOString().slice(0, 7)]
+    return []
   }
 }
 

@@ -94,11 +94,7 @@ async function getAvailablePeriods(supabase: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  let periods = data?.map((item: any) => item.period) || []
-  if (periods.length === 0) {
-    const currentMonth = new Date().toISOString().slice(0, 7)
-    periods = [currentMonth]
-  }
+  const periods = (data || []).map((item: any) => item.period).filter(Boolean)
   return NextResponse.json({ success: true, periods })
 }
 

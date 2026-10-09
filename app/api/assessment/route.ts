@@ -375,6 +375,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (itemsToProcess.length === 0) {
+      return NextResponse.json({ error: 'Tidak ada data penilaian' }, { status: 400 })
+    }
+
+    // Validate that period is specified and exists in t_pool
+    const samplePeriod = itemsToProcess[0]?.period
+    if (!samplePeriod || samplePeriod.trim() === '') {
+      return NextResponse.json({ error: 'Periode penilaian harus dipilih terlebih dahulu' }, { status: 400 })
+    }
+
+    const { data: poolCheck } = await adminClient
+      .from('t_pool')
+      .select('period')
+      .eq('period', samplePeriod)
+      .maybeSingle()
+
+    if (!poolCheck) {
+      return NextResponse.json({ error: `Periode ${samplePeriod} belum memiliki pool pendapatan` }, { status: 400 })
+    }
+
     const results = []
     for (const item of itemsToProcess) {
       const assessmentItem: Assessment = {
