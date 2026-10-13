@@ -295,10 +295,19 @@ export async function POST(request: NextRequest) {
         const id = row.employee_id || row.nik + row.employee_name;
         const existing = mergedMap.get(id);
         if (existing) {
-          existing.p1_score = Number(existing.p1_score || 0) + Number(row.p1_score || 0);
-          existing.p2_score = Number(existing.p2_score || 0) + Number(row.p2_score || 0);
-          existing.p3_score = Number(existing.p3_score || 0) + Number(row.p3_score || 0);
-          existing.total_score = Number(existing.total_score || 0) + Number(row.total_score || 0);
+          const mergeIndexScore = (s1: any, s2: any) => {
+            const n1 = Number(s1 || 0);
+            const n2 = Number(s2 || 0);
+            if (n1 > 0 && n2 > 0) {
+              return Number(((n1 + n2) / 2).toFixed(2));
+            }
+            return n1 > 0 ? n1 : n2;
+          };
+
+          existing.p1_score = mergeIndexScore(existing.p1_score, row.p1_score);
+          existing.p2_score = mergeIndexScore(existing.p2_score, row.p2_score);
+          existing.p3_score = mergeIndexScore(existing.p3_score, row.p3_score);
+          existing.total_score = Number((Number(existing.p1_score || 0) + Number(existing.p2_score || 0) + Number(existing.p3_score || 0)).toFixed(2));
           existing.p1_priority = Number(existing.p1_priority || 0) + Number(row.p1_priority || 0);
           existing.p2_priority = Number(existing.p2_priority || 0) + Number(row.p2_priority || 0);
           existing.p3_priority = Number(existing.p3_priority || 0) + Number(row.p3_priority || 0);
@@ -616,6 +625,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       target_value,
       calculation_method,
       m_kpi_categories (
+        id,
+        unit_id,
         category,
         weight_percentage,
         configuration_style,
@@ -888,7 +899,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   if (!allEmployees) return []
 
   // --- Helper: Calculate total score/activity for an employee ---
-  const calcEmployeeTotalScore = (empId: string, isMedicalUnit: boolean) => {
+  const calcEmployeeTotalScore = (empId: string, isMedicalUnit: boolean, uId?: string) => {
     let rawEmpAssessments = allAssessments?.filter((a: any) => a.employee_id === empId) || []
 
     // Deduplicate main assessments to prevent score inflation from race-condition duplicate inserts
@@ -916,8 +927,11 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const calcCategoryScore = (categoryName: string) => {
       const targetCat = categoryName.trim().toUpperCase()
       const catAssessments = empAssessments.filter((a: any) => {
-        const cat = (a.m_kpi_indicators?.m_kpi_categories?.category || '').trim().toUpperCase()
-        return cat === targetCat || cat.startsWith(targetCat)
+        const catObj = a.m_kpi_indicators?.m_kpi_categories
+        const cat = (catObj?.category || '').trim().toUpperCase()
+        const catUnit = catObj?.unit_id
+        const belongsToUnit = !catUnit || !uId || catUnit === uId
+        return (cat === targetCat || cat.startsWith(targetCat)) && belongsToUnit
       })
 
       if (catAssessments.length === 0) {
@@ -940,8 +954,12 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
         const basicVal = parseFloat(a.m_kpi_indicators?.base_index_value) || 0
         const rawScore = a.score  // already weighted metric from DB
         const indName = a.m_kpi_indicators?.name || '-'
-        const indWeight = parseFloat(a.weight_percentage) || parseFloat(a.m_kpi_indicators?.weight_percentage) || 0
-        const indTarget = parseFloat(a.target_value) || parseFloat(a.m_kpi_indicators?.target_value) || 0
+        const indWeight = (a.m_kpi_indicators?.weight_percentage !== undefined && a.m_kpi_indicators?.weight_percentage !== null)
+          ? parseFloat(a.m_kpi_indicators.weight_percentage)
+          : (parseFloat(a.weight_percentage) || 0)
+        const indTarget = (a.m_kpi_indicators?.target_value !== undefined && a.m_kpi_indicators?.target_value !== null)
+          ? parseFloat(a.m_kpi_indicators.target_value)
+          : (parseFloat(a.target_value) || 0)
         const calcMethod = a.m_kpi_indicators?.calculation_method || 'indexing'
 
         const isPriority = calcMethod === 'priority'
@@ -1055,15 +1073,19 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const total_priority_score = Number((p1_priority + p2_priority + p3_priority).toFixed(2))
 
     // Catch-all for assessments in other categories to ensure they are added to assessmentDetails
-    const remainingAssessments = empAssessments.filter((a: any) => !processedIndices.has(`${a.employee_id}:${a.indicator_id}`))
+    const remainingAssessments = empAssessments.filter((a: any) => {
+      if (processedIndices.has(`${a.employee_id}:${a.indicator_id}`)) return false
+      const catUnit = a.m_kpi_indicators?.m_kpi_categories?.unit_id
+      return !catUnit || !uId || catUnit === uId
+    })
     for (const a of remainingAssessments) {
       const indName = a.m_kpi_indicators?.name || '-'
       const catName = a.m_kpi_indicators?.m_kpi_categories?.category || 'Lainnya'
       assessmentDetails.push({
         name: indName,
         category: catName,
-        weight: parseFloat(a.weight_percentage) || 0,
-        target: parseFloat(a.target_value) || 100,
+        weight: parseFloat(a.m_kpi_indicators?.weight_percentage ?? a.weight_percentage) || 0,
+        target: parseFloat(a.m_kpi_indicators?.target_value ?? a.target_value) || 100,
         realization: parseFloat(a.realization_value) || 0,
         score: parseFloat(a.score) || 0,
         is_weighted: false,
@@ -1099,7 +1121,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const uId = unitData?.id
     const isMedical = isMedicalUnit(uId, unitData?.name)
 
-    const scores = calcEmployeeTotalScore(emp.id, isMedical)
+    const scores = calcEmployeeTotalScore(emp.id, isMedical, uId)
 
     employeeScoresMap.set(emp.id, { emp, ...scores })
 

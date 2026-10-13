@@ -22,7 +22,7 @@ async function setup() {
     // 2. Create User
     const { data: userRecord, error: userErr } = await supabase.auth.admin.createUser({
         email: 'admin@sungaipenuh.com',
-        password: 'admin123',
+        password: 'Adminpenuh123',
         email_confirm: true,
         user_metadata: { role: 'superadmin', full_name: 'Superadmin Sungaipenuh' }
     });
@@ -37,7 +37,7 @@ async function setup() {
                 userId = existing.id;
                 // update password & meta just in case
                 await supabase.auth.admin.updateUserById(userId, {
-                    password: 'admin123',
+                    password: 'Adminpenuh123',
                     user_metadata: { role: 'superadmin', full_name: 'Superadmin Sungaipenuh' }
                 });
                 console.log('Updated existing auth user.');

@@ -138,8 +138,8 @@ export async function middleware(request: NextRequest) {
         console.warn('[MIDDLEWARE] Auth check getUser error:', userError.message)
       }
 
-      // Fallback: Verify using local JWT decoding if Supabase Cloud API hits a rate limit (429) or 5xx server fail
-      if (isRateLimit || (status && status >= 500)) {
+      // Fallback: Verify using local JWT decoding if Supabase Cloud API hits an error (e.g. rate limit 429, 5xx, or network failure)
+      if (userError && !user) {
         const cookieHeader = request.headers.get('cookie')
         const token = extractTokenFromCookies(cookieHeader, request.cookies.getAll())
         if (token) {
@@ -147,7 +147,7 @@ export async function middleware(request: NextRequest) {
           if (decodedUser) {
             user = decodedUser as any
             userError = null
-            console.log('[MIDDLEWARE] Fallback to decoded local JWT succeeded despite rate limit.')
+            console.log('[MIDDLEWARE] Fallback to decoded local JWT succeeded.')
           }
         }
       }

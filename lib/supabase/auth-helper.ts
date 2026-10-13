@@ -18,8 +18,9 @@ export function decodeJwtPayload(token: string) {
 
         if (!payload.sub) return null
 
-        // Expiration check
-        if (payload.exp && payload.exp * 1000 < Date.now()) {
+        // Expiration check (with clock skew tolerance for client/server clock drift)
+        const clockSkewMs = 24 * 60 * 60 * 1000
+        if (payload.exp && (payload.exp * 1000 + clockSkewMs) < Date.now()) {
             return null
         }
 
