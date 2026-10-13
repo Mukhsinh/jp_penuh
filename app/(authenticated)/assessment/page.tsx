@@ -40,8 +40,8 @@ export default async function AssessmentPage() {
 
     const availablePeriods = await getAvailablePeriods(supabase)
 
-    const authRole = user.role || user.app_metadata?.role || user.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaipenuh.com'
+    const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
+    let isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com'
 
     const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
@@ -94,8 +94,33 @@ export default async function AssessmentPage() {
     }
 
     // Use database role if defined, otherwise fallback to Auth metadata for superadmin detection
-    if ((!currentEmployee.role || currentEmployee.role === 'employee') && isSuperAdmin) {
+    if (currentEmployee.role === 'superadmin' || currentEmployee.role === 'admin') {
+      isSuperAdmin = true
+    }
+    if (isSuperAdmin) {
       currentEmployee.role = 'superadmin'
+    }
+
+    // Fetch initial units on the server for instant availability without client auth race conditions
+    let initialAvailableUnits: { id: string; name: string }[] = []
+    try {
+      const unitsClient = isSuperAdmin ? await createAdminClient() : supabase
+      let unitsQuery = unitsClient
+        .from('m_units')
+        .select('id, name, code')
+        .eq('is_active', true)
+        .order('name')
+
+      if (currentEmployee.role === 'unit_manager' && currentEmployee.unit_id && currentEmployee.unit_id !== 'all') {
+        unitsQuery = unitsQuery.eq('id', currentEmployee.unit_id)
+      }
+
+      const { data: unitsData } = await unitsQuery
+      initialAvailableUnits = (unitsData || [])
+        .filter((u: any) => u.code?.toUpperCase() !== 'ADMIN' && u.name?.toUpperCase() !== 'SUPERADMIN')
+        .map(({ id, name }: any) => ({ id, name }))
+    } catch (e) {
+      console.error('Error fetching initial units on server:', e)
     }
 
     return (
@@ -115,6 +140,7 @@ export default async function AssessmentPage() {
           <AssessmentPageContent
             currentEmployee={currentEmployee}
             availablePeriods={availablePeriods}
+            initialAvailableUnits={initialAvailableUnits}
           />
         </Suspense>
       </div>

@@ -96,9 +96,12 @@ function calculatePPh21(
     if (gradeStr.startsWith('III') || gradeStr.startsWith('3')) {
       return { amount: Math.round(monthlyGross * 0.05), text: `5% x Bruto (PNS Golongan III)` }
     }
+    if (gradeStr.startsWith('II') || gradeStr.startsWith('2') || gradeStr.startsWith('I') || gradeStr.startsWith('1')) {
+      return { amount: 0, text: `Golongan II Kebawah (0%)` }
+    }
 
-    // Fallback detection if status is ASN/PNS but grade is undefined/null
-    if (stat === 'ASN' || stat === 'PNS' || stat === 'ACTIVE') {
+    // Fallback detection ONLY if status is ASN/PNS and grade is not provided
+    if (!hasGrade && (stat === 'ASN' || stat === 'PNS' || stat === 'ACTIVE')) {
       return { amount: Math.round(monthlyGross * 0.05), text: `5% x Bruto (PNS - Gradeless fallback)` }
     }
 
@@ -203,7 +206,7 @@ export async function POST(request: NextRequest) {
     }
 
     const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
-    const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com'
+    const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com' || employee?.role === 'superadmin'
 
     if (!employee) {
       if (isSuperAdmin) {
@@ -305,12 +308,12 @@ export async function POST(request: NextRequest) {
           existing.pir_value = Number(existing.pir_value || 0) + Number(row.pir_value || 0);
           existing.index_incentive = Number(existing.index_incentive || 0) + Number(row.index_incentive || 0);
           existing.guarantee_fee = Number(existing.guarantee_fee || 0) + Number(row.guarantee_fee || 0);
-          existing.gross_incentive = Number(existing.gross_incentive || 0) + Number(row.gross_incentive || 0);
-          existing.tax_amount = Number(existing.tax_amount || 0) + Number(row.tax_amount || 0);
-          existing.net_incentive = Number(existing.net_incentive || 0) + Number(row.net_incentive || 0);
+          existing.gross_incentive = Number((Number(existing.gross_incentive || 0) + Number(row.gross_incentive || 0)).toFixed(2));
+          existing.tax_amount = Number((Number(existing.tax_amount || 0) + Number(row.tax_amount || 0)).toFixed(2));
+          existing.net_incentive = Number((Number(existing.net_incentive || 0) + Number(row.net_incentive || 0)).toFixed(2));
 
-          existing.unit_allocation = Number(existing.unit_allocation || 0) + Number(row.unit_allocation || 0);
-          existing.unit_total_activity = Number(existing.unit_total_activity || 0) + Number(row.unit_total_activity || 0);
+          existing.unit_allocation = Number((Number(existing.unit_allocation || 0) + Number(row.unit_allocation || 0)).toFixed(2));
+          existing.unit_total_activity = Number((Number(existing.unit_total_activity || 0) + Number(row.unit_total_activity || 0)).toFixed(2));
 
           // Handle proportion safely. If they differ, stringify them nicely (e.g. "0.22% / 0.15%").
           const formatProp = (val: any) => {
@@ -1100,7 +1103,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
     employeeScoresMap.set(emp.id, { emp, ...scores })
 
-    unitTotalScoresMap.set(uId, Number(unitTotalScoresMap.get(uId) || 0) + Number(scores.totalScore))
+    const currentScoreSum = unitTotalScoresMap.get(uId) || 0
+    unitTotalScoresMap.set(uId, Math.round((currentScoreSum + Number(scores.totalScore || 0)) * 100) / 100)
     unitTotalActivityMap.set(uId, Number(unitTotalActivityMap.get(uId) || 0) + Number(scores.totalActivityRupiah))
     unitEmployeeCountMap.set(uId, Number(unitEmployeeCountMap.get(uId) || 0) + 1)
   }
@@ -1155,8 +1159,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       if (pir < 0) pir = 0;
     }
 
-    const roundedPir = Number(pir.toFixed(2));
-    unitPIRMap.set(uId, roundedPir)
+    // Keep full precision PIR in unitPIRMap for exact mathematical incentive calculations
+    unitPIRMap.set(uId, pir)
 
     // Save audit trail (using original field names)
     // Note: pir_value reflects the merit indices value, 
@@ -1333,14 +1337,58 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       guarantee_fee: guaranteeFee,
       total_skor_unit: Number(totalSkorUnit),
       unit_proportion: Number(unitProp),
-      unit_allocation: uId ? (Number(netPool) * (Number(unitProp) / 100)) : 0,
+      unit_allocation: uId ? Number((Number(netPool) * (Number(unitProp) / 100)).toFixed(2)) : 0,
       unit_total_activity: uId ? Number(unitTotalActivityMap.get(uId) || 0) : 0,
-      gross_incentive: grossIncentive,
+      gross_incentive: Number(grossIncentive.toFixed(2)),
       tax_amount: taxCheck.amount,
       tax_detail: taxCheck.text,
-      net_incentive: netIncentive,
+      net_incentive: Number(netIncentive.toFixed(2)),
       assessment_details: assessmentDetails,
     })
+  }
+
+  // --- Unit Allocation Reconciliation ---
+  // Ensure the sum of gross_incentive for each unit matches the unit_allocation exactly (down to the cent)
+  const unitReportRowsMap = new Map<string, any[]>()
+  for (const row of report) {
+    const uData = employeeScoresMap.get(row.employee_id)?.emp?.m_units
+    const uId = Array.isArray(uData) ? uData[0]?.id : uData?.id
+    if (!uId) continue
+    if (!unitReportRowsMap.has(uId)) unitReportRowsMap.set(uId, [])
+    unitReportRowsMap.get(uId)!.push(row)
+  }
+
+  for (const [uId, rows] of unitReportRowsMap.entries()) {
+    if (rows.length === 0) continue
+    const targetAlloc = rows[0].unit_allocation || 0
+    if (targetAlloc <= 0) continue
+
+    // Guard: Only reconcile when full unit report is generated (not for single employee filters)
+    const expectedCount = unitEmployeeCountMap.get(uId) || rows.length
+    if (employeeId && employeeId !== 'all') continue
+    if (rows.length < expectedCount) continue
+
+    const currentGrossSum = Number(rows.reduce((acc, r) => acc + (Number(r.gross_incentive) || 0), 0).toFixed(2))
+    const diff = Number((targetAlloc - currentGrossSum).toFixed(2))
+
+    // If there is any minute cent/sen rounding difference, reconcile it on the highest scoring employee row
+    if (Math.abs(diff) > 0 && Math.abs(diff) < 50) {
+      const topRow = rows.reduce((max, r) => (Number(r.total_score || 0) > Number(max.total_score || 0) ? r : max), rows[0])
+      topRow.gross_incentive = Number((Number(topRow.gross_incentive || 0) + diff).toFixed(2))
+      topRow.index_incentive = Number((Number(topRow.index_incentive || 0) + diff).toFixed(2))
+
+      const newTaxCheck = calculatePPh21(
+        topRow.gross_incentive,
+        topRow.employee_status,
+        topRow.tax_type,
+        topRow.tax_status,
+        topRow.pns_grade,
+        taxMechanism as any
+      )
+      topRow.tax_amount = newTaxCheck.amount
+      topRow.tax_detail = newTaxCheck.text
+      topRow.net_incentive = Number((topRow.gross_incentive - topRow.tax_amount).toFixed(2))
+    }
   }
 
   // Sort by full name for better readability

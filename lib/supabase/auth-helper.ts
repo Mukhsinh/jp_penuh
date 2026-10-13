@@ -28,7 +28,7 @@ export function decodeJwtPayload(token: string) {
             email: payload.email || '',
             user_metadata: payload.user_metadata || {},
             app_metadata: payload.app_metadata || {},
-            role: payload.role || payload.app_metadata?.role || payload.user_metadata?.role
+            role: payload.app_metadata?.role || payload.user_metadata?.role || payload.role
         }
     } catch (e) {
         return null

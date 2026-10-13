@@ -564,13 +564,13 @@ export async function generateSummaryReportPDF(
       formatScore(r.p2_score),
       formatScore(r.p3_score),
       formatScore(r.total_score),
-      Math.round(Number(r.total_priority_score || r.total_activity_rupiah || r.total_activity || 0)).toLocaleString('id-ID'),
+      Number(r.total_priority_score || r.total_activity_rupiah || r.total_activity || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
       formatScore(r.pir_value),
-      Math.round(Number(r.potongan) || 0).toLocaleString('id-ID'),
-      Math.round(Number(r.distribusi_potongan) || 0).toLocaleString('id-ID'),
-      Math.round(Number(r.gross_incentive) || 0).toLocaleString('id-ID'),
-      Math.round(Number(r.tax_amount) || 0).toLocaleString('id-ID'),
-      Math.round(Number(r.net_incentive) || 0).toLocaleString('id-ID')
+      Number(r.potongan || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      Number(r.distribusi_potongan || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      Number(r.gross_incentive || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      Number(r.tax_amount || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      Number(r.net_incentive || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     ])
     autoTable(doc, {
       startY: 50,

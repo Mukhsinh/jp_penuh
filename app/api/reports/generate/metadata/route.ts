@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
         }
 
         const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
-        const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com'
+        const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaipenuh.com' || employee?.role === 'superadmin' || employee?.role === 'admin'
 
         if (!employee) {
             if (isSuperAdmin) {
@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
                 .select('id, name, code')
                 .eq('is_active', true)
                 .neq('code', 'ADMIN')
+                .neq('code', 'Superadmin')
                 .order('name')
                 .range(0, 9999)
 

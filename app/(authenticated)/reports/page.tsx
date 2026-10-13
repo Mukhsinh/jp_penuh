@@ -124,8 +124,50 @@ function IncentiveTable({ data }: { data: any[] }) {
     'INSENTIF PRIORITAS', 'PIR', 'POTONGAN', 'DISTRIBUSI POTONGAN', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
   ]
 
+  const totalP1 = data.reduce((acc, r) => acc + (Number(r.p1_score) || 0), 0)
+  const totalP2 = data.reduce((acc, r) => acc + (Number(r.p2_score) || 0), 0)
+  const totalP3 = data.reduce((acc, r) => acc + (Number(r.p3_score) || 0), 0)
+  const totalScore = data.reduce((acc, r) => acc + (Number(r.total_score) || 0), 0)
+  const totalPriority = data.reduce((acc, r) => acc + (Number(r.total_priority_score) || Number(r.total_activity_rupiah) || Number(r.total_activity) || 0), 0)
+  const totalPotongan = data.reduce((acc, r) => acc + (Number(r.potongan) || 0), 0)
+  const totalDistribusi = data.reduce((acc, r) => acc + (Number(r.distribusi_potongan) || 0), 0)
+  const totalGross = data.reduce((acc, r) => acc + (Number(r.gross_incentive) || 0), 0)
+  const totalTax = data.reduce((acc, r) => acc + (Number(r.tax_amount) || 0), 0)
+  const totalNet = data.reduce((acc, r) => acc + (Number(r.net_incentive) || 0), 0)
+
+  const isSingleUnit = data.length > 0 && data.every((r: any) => r.unit === data[0].unit)
+  const unitAllocation = Number(data[0]?.unit_allocation) || 0
+  const diffAlloc = Math.abs(Number(totalGross.toFixed(2)) - Number(unitAllocation.toFixed(2)))
+
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto space-y-3">
+      {isSingleUnit && unitAllocation > 0 && (
+        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <span className="text-gray-500">Unit:</span> <strong className="text-gray-800">{data[0].unit}</strong>
+            </div>
+            <div>
+              <span className="text-gray-500">Alokasi Unit:</span> <strong className="font-mono text-blue-700">{formatCurrency(unitAllocation, true, 2)}</strong>
+            </div>
+            <div>
+              <span className="text-gray-500">Total Insentif Bruto:</span> <strong className="font-mono text-slate-800">{formatCurrency(totalGross, true, 2)}</strong>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {diffAlloc < 0.05 ? (
+              <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-800 border border-green-200">
+                ✓ Insentif Bruto Sama Persis dengan Alokasi Unit (Selisih: Rp 0,00)
+              </span>
+            ) : (
+              <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                Selisih: {formatCurrency(diffAlloc, true, 2)}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       <table className="w-full border-collapse text-sm min-w-[1100px]">
         <thead>
           <tr className="bg-gray-100">
@@ -146,21 +188,21 @@ function IncentiveTable({ data }: { data: any[] }) {
               <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p3_score) || 0, 2)}</td>
               <td className="border p-2 text-right font-bold font-mono text-blue-700">{formatNumber(Number(row.total_score) || 0, 2)}</td>
               <td className="border p-2 text-right font-semibold text-orange-600 font-mono">
-                {formatCurrency(Number(row.total_priority_score) || Number(row.total_activity_rupiah) || Number(row.total_activity) || 0)}
+                {formatCurrency(Number(row.total_priority_score) || Number(row.total_activity_rupiah) || Number(row.total_activity) || 0, true, 2)}
               </td>
               <td className="border p-2 text-right text-purple-600 font-mono font-medium">{formatCurrency(Number(row.pir_value) || 0, true, 2)}</td>
               <td className="border p-2 text-right font-mono font-medium text-red-600">
-                {formatCurrency(Number(row.potongan) || 0)}
+                {formatCurrency(Number(row.potongan) || 0, true, 2)}
               </td>
               <td className="border p-2 text-right font-mono font-medium text-emerald-600">
-                {formatCurrency(Number(row.distribusi_potongan) || 0)}
+                {formatCurrency(Number(row.distribusi_potongan) || 0, true, 2)}
               </td>
               <td className="border p-2 text-right font-bold font-mono text-slate-800">
                 <div className="text-[9px] text-gray-400 font-normal">(Indeks × PIR) + Prioritas + Dist. Pot. - Potongan</div>
-                {formatCurrency(Number(row.gross_incentive) || 0)}
+                {formatCurrency(Number(row.gross_incentive) || 0, true, 2)}
               </td>
               <td className="border p-2 text-right text-red-600 font-mono">
-                {formatCurrency(Number(row.tax_amount) || 0)}
+                {formatCurrency(Number(row.tax_amount) || 0, true, 2)}
                 {row.tax_detail && typeof row.tax_detail === 'string' && row.tax_detail !== '-' && (
                   <div className="text-[9px] text-gray-500 italic font-sans">({row.tax_detail})</div>
                 )}
@@ -169,11 +211,27 @@ function IncentiveTable({ data }: { data: any[] }) {
                 <div className="text-[9px] text-gray-400 font-normal font-sans">
                   {row.tax_mechanism_used === 'none' ? 'Insentif Bruto' : 'Take Home Pay'}
                 </div>
-                {formatCurrency(Number(row.net_incentive) || 0)}
+                {formatCurrency(Number(row.net_incentive) || 0, true, 2)}
               </td>
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr className="bg-gray-100 font-bold text-xs border-t-2 border-gray-300">
+            <td colSpan={4} className="border p-2 text-center text-gray-700">TOTAL KESELURUHAN ({data.length} Pegawai)</td>
+            <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(totalP1, 2)}</td>
+            <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(totalP2, 2)}</td>
+            <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(totalP3, 2)}</td>
+            <td className="border p-2 text-right font-mono text-blue-700">{formatNumber(totalScore, 2)}</td>
+            <td className="border p-2 text-right font-mono text-orange-600">{formatCurrency(totalPriority, true, 2)}</td>
+            <td className="border p-2 text-center font-mono text-gray-400">-</td>
+            <td className="border p-2 text-right font-mono text-red-600">{formatCurrency(totalPotongan, true, 2)}</td>
+            <td className="border p-2 text-right font-mono text-emerald-600">{formatCurrency(totalDistribusi, true, 2)}</td>
+            <td className="border p-2 text-right font-mono text-slate-800">{formatCurrency(totalGross, true, 2)}</td>
+            <td className="border p-2 text-right font-mono text-red-600">{formatCurrency(totalTax, true, 2)}</td>
+            <td className="border p-2 text-right font-mono text-green-700">{formatCurrency(totalNet, true, 2)}</td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   )
@@ -298,27 +356,44 @@ export default function ReportsPage() {
 
   useEffect(() => {
     setIsMounted(true)
+
+    const fetchWithRetry = async (url: string, retries = 3, delay = 500) => {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const res = await fetch(url)
+          if (res.ok) {
+            return await res.json()
+          }
+        } catch (e) {
+          if (i === retries - 1) console.error(`Failed to fetch ${url} after ${retries} tries:`, e)
+        }
+        await new Promise(r => setTimeout(r, delay * (i + 1)))
+      }
+      return null
+    }
+
     const fetchMetadata = async () => {
       try {
-        const [unitsRes, empRes, profileRes] = await Promise.all([
-          fetch('/api/reports/generate/metadata?type=units'),
-          fetch('/api/reports/generate/metadata?type=employees'),
-          fetch('/api/profile'),
-        ])
         const [units, employees, profile] = await Promise.all([
-          unitsRes.json(),
-          empRes.json(),
-          profileRes.json()
+          fetchWithRetry('/api/reports/generate/metadata?type=units'),
+          fetchWithRetry('/api/reports/generate/metadata?type=employees'),
+          fetchWithRetry('/api/profile'),
         ])
 
-        setAvailableUnits(units.data || [])
-        setAvailableEmployees(employees.data || [])
+        if (units?.data) {
+          setAvailableUnits(units.data)
+        }
+        if (employees?.data) {
+          setAvailableEmployees(employees.data)
+        }
 
-        if (profile.success) {
+        if (profile?.success && profile?.data) {
           setUserProfile(profile.data)
           // If unit manager, auto-select their unit
           if (profile.data.role === 'unit_manager' && profile.data.unit_id) {
             setSelectedUnit(profile.data.unit_id)
+          } else if (profile.data.role === 'superadmin' || profile.data.role === 'admin') {
+            setSelectedUnit('all')
           }
         }
       } catch (err) {

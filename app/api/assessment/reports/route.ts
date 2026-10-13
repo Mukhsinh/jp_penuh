@@ -4,13 +4,24 @@ import { isMedicalUnit } from '@/lib/utils/medical-unit'
 import { calculateCategoryScore, calculateTotalScore } from '@/lib/utils/score-calculator'
 
 async function getUserEmployee(adminClient: any, user: any) {
+  const isSuperAdmin =
+    user.app_metadata?.role === 'superadmin' ||
+    user.user_metadata?.role === 'superadmin' ||
+    user.role === 'superadmin' ||
+    user.email === 'admin@sungaipenuh.com'
+
   const { data: emp } = await adminClient
     .from('m_employees')
     .select('id, role, unit_id')
     .eq('user_id', user.id)
     .maybeSingle()
 
-  if (emp) return emp
+  if (emp) {
+    if (isSuperAdmin || emp.role === 'superadmin' || emp.role === 'admin') {
+      return { ...emp, role: 'superadmin' }
+    }
+    return emp
+  }
 
   if (user.email) {
     const { data: byEmail } = await adminClient
@@ -19,13 +30,13 @@ async function getUserEmployee(adminClient: any, user: any) {
       .eq('email', user.email)
       .maybeSingle()
 
-    if (byEmail) return byEmail
+    if (byEmail) {
+      if (isSuperAdmin || byEmail.role === 'superadmin' || byEmail.role === 'admin') {
+        return { ...byEmail, role: 'superadmin' }
+      }
+      return byEmail
+    }
   }
-
-  const isSuperAdmin =
-    user.app_metadata?.role === 'superadmin' ||
-    user.user_metadata?.role === 'superadmin' ||
-    user.email === 'admin@sungaipenuh.com'
 
   if (isSuperAdmin) {
     return { id: user.id, role: 'superadmin', unit_id: '0' }

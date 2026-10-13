@@ -21,11 +21,13 @@ interface AssessmentPageContentProps {
     full_name: string
   }
   availablePeriods: string[]
+  initialAvailableUnits?: { id: string; name: string }[]
 }
 
 export default function AssessmentPageContent({
   currentEmployee,
-  availablePeriods: availablePeriodsProp
+  availablePeriods: availablePeriodsProp,
+  initialAvailableUnits = []
 }: AssessmentPageContentProps) {
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>('bpjs')
   const [availablePeriods, setAvailablePeriods] = useState<string[]>(availablePeriodsProp || [])
@@ -37,9 +39,9 @@ export default function AssessmentPageContent({
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [availableUnits, setAvailableUnits] = useState<{ id: string, name: string }[]>([])
+  const [availableUnits, setAvailableUnits] = useState<{ id: string, name: string }[]>(initialAvailableUnits)
   const [unitFilter, setUnitFilter] = useState<string>(
-    currentEmployee.role === 'unit_manager' ? currentEmployee.unit_id : 'all'
+    currentEmployee.role === 'superadmin' ? 'all' : (currentEmployee.role === 'unit_manager' ? currentEmployee.unit_id : 'all')
   )
   const [isAddPeriodDialogOpen, setIsAddPeriodDialogOpen] = useState(false)
   const [summary, setSummary] = useState({
@@ -52,28 +54,37 @@ export default function AssessmentPageContent({
   })
   const [copyingUnit, setCopyingUnit] = useState(false)
 
-  // Load periods and units sequentially to avoid rate limits
-  const loadInitialData = async () => {
+  // Load periods and units with retry logic
+  const loadInitialData = async (retryCount = 0) => {
     try {
-      // Load periods first
-      const periodsRes = await fetch('/api/assessment/reports?action=periods')
-      if (periodsRes.ok) {
-        const periodsData = await periodsRes.json()
-        if (periodsData.success && periodsData.periods) {
-          setAvailablePeriods(periodsData.periods)
+      // Load periods first if not already present
+      if (availablePeriods.length === 0) {
+        const periodsRes = await fetch('/api/assessment/reports?action=periods')
+        if (periodsRes.ok) {
+          const periodsData = await periodsRes.json()
+          if (periodsData.success && periodsData.periods) {
+            setAvailablePeriods(periodsData.periods)
+          }
         }
       }
 
-      // Then load units (sequential to avoid auth rate limit)
+      // Then load units
       const unitsRes = await fetch('/api/assessment/reports?action=units')
       if (unitsRes.ok) {
         const unitsData = await unitsRes.json()
-        if (unitsData.success && unitsData.units) {
+        if (unitsData.success && unitsData.units && unitsData.units.length > 0) {
           setAvailableUnits(unitsData.units)
         }
+      } else if (unitsRes.status === 401 && retryCount < 2) {
+        await new Promise(res => setTimeout(res, 500))
+        return loadInitialData(retryCount + 1)
       }
     } catch (error) {
       console.error('Error loading initial data:', error)
+      if (retryCount < 2) {
+        await new Promise(res => setTimeout(res, 500))
+        return loadInitialData(retryCount + 1)
+      }
     }
   }
 
