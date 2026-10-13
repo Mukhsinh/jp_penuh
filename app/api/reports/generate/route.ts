@@ -837,10 +837,27 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     empMedicalMap.set(emp.id, isMedicalUnit(unitData?.id, unitData?.name))
   }
 
+  // Deduplicate sub-assessments by employee_id + indicator_id + sub_indicator_id
+  const uniqueSubMap = new Map<string, any>()
+  for (const s of subAssessments) {
+    const key = `${s.employee_id}:${s.indicator_id}:${s.sub_indicator_id}`
+    const existing = uniqueSubMap.get(key)
+    if (!existing) {
+      uniqueSubMap.set(key, s)
+    } else {
+      const existingTime = new Date(existing.updated_at || existing.created_at || 0).getTime()
+      const newTime = new Date(s.updated_at || s.created_at || 0).getTime()
+      if (newTime > existingTime) {
+        uniqueSubMap.set(key, s)
+      }
+    }
+  }
+  const cleanSubAssessments = Array.from(uniqueSubMap.values())
+
   // Build a lookup: employee_id+indicator_id → aggregated sub-assessment score & realization
   // Used as fallback when main row score is null (legacy data)
   const subScoreMap = new Map<string, { score: number; realization: number }>()
-  for (const sub of subAssessments) {
+  for (const sub of cleanSubAssessments) {
     const key = `${sub.employee_id}:${sub.indicator_id}`
     const existing = subScoreMap.get(key)
     const isMed = empMedicalMap.get(sub.employee_id) || false
@@ -876,9 +893,16 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       if (effectiveScore === 0 && Math.abs(Number(sub.realization_value)) > 0) {
         if (isPriority) {
           const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
-          const mainBase = Number(mainAsses?.m_kpi_indicators?.base_index_value || 0)
-          const baseIndex = subBase !== 0 ? subBase : (mainBase !== 0 ? mainBase : 1)
-          effectiveScore = Number(sub.realization_value) * baseIndex
+          const realVal = Number(sub.realization_value || 0)
+          // For qualitative/scoring priority indicators, realization_value holds the direct score
+          // chosen from scoring criteria (e.g. Rp 100.000 for Kepala Ruang, Rp 50.000 for MOD).
+          // If realVal is already the full nominal value (realVal >= subBase or realVal > 10),
+          // do NOT multiply by subBase to prevent squaring into billions (e.g. 100.000 * 100.000 = 10 milyar).
+          if (subBase > 1 && realVal < subBase && realVal <= 10) {
+            effectiveScore = realVal * subBase
+          } else {
+            effectiveScore = realVal
+          }
         } else {
           effectiveScore = Number(sub.realization_value) * (isMed ? 1 : (weight / 100))
         }
@@ -973,7 +997,11 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
         if (subAgg !== undefined) {
           effectiveScore = subAgg.score
         } else if (isActivity) {
-          effectiveScore = indRealization * basicVal
+          if (basicVal > 1 && indRealization < basicVal && indRealization <= 10) {
+            effectiveScore = indRealization * basicVal
+          } else {
+            effectiveScore = indRealization
+          }
         } else if (rawScore !== null && rawScore !== undefined && !isNaN(parseFloat(rawScore))) {
           effectiveScore = parseFloat(rawScore)
 

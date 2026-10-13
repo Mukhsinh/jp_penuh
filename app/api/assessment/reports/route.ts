@@ -241,6 +241,7 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
       ),
       m_kpi_indicators!inner!indicator_id (
         name,
+        calculation_method,
         m_kpi_categories!inner!category_id (
           category
         )
