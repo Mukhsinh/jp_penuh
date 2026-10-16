@@ -45,10 +45,17 @@ async function findEmployeeForUser(adminClient: any, userId: string, authUser: a
     return employeeData
   }
 
-  // 3. Fallback for Superadmins: return virtual employee record
+  // 3. Fallback for Superadmins: return virtual employee record with valid UUID
   if (isSuperAdmin) {
+    const { data: adminEmp } = await adminClient
+      .from('m_employees')
+      .select('id, role, unit_id')
+      .or('role.eq.superadmin,role.eq.admin,email.eq.admin@sungaipenuh.com')
+      .limit(1)
+      .maybeSingle()
+
     return {
-      id: 'superadmin-virtual',
+      id: adminEmp?.id || userId,
       role: 'superadmin',
       unit_id: '0'
     }
@@ -98,15 +105,19 @@ async function upsertAssessment(
   assessment: Assessment,
   existingMap?: Map<string, string>
 ): Promise<Assessment> {
-  const achievement = assessment.achievement_percentage !== undefined
-    ? assessment.achievement_percentage
-    : (assessment.target_value === 0 ? 100 : (assessment.realization_value / assessment.target_value) * 100)
-
-  const score = assessment.score !== undefined
-    ? assessment.score
-    : (achievement * assessment.weight_percentage) / 100
-
   const revType = assessment.revenue_type || 'bpjs'
+
+  // Pre-calculate sub-assessments aggregate before saving main row
+  let aggregateScore = 0
+  let aggregateRealization = 0
+  const hasSubs = Array.isArray(assessment.sub_assessments) && assessment.sub_assessments.length > 0
+
+  if (hasSubs) {
+    for (const sub of assessment.sub_assessments) {
+      aggregateScore += (sub.score || 0)
+      aggregateRealization += (sub.realization_value || 0)
+    }
+  }
 
   // Look up existing assessment ID for this exact revenue_type if ID not provided
   let existingId = assessment.id
@@ -132,14 +143,13 @@ async function upsertAssessment(
   }
 
   // 1. Prepare Main Assessment Data
-  // Note: achievement_percentage and score are GENERATED ALWAYS columns in PostgreSQL, so we omit them
-  // to allow Postgres to generate them automatically without throwing non-DEFAULT column errors.
+  const effectiveRealization = hasSubs ? aggregateRealization : assessment.realization_value
   const assessmentData: any = {
     employee_id: assessment.employee_id,
     indicator_id: assessment.indicator_id,
     sub_indicator_id: null,
     period: assessment.period,
-    realization_value: assessment.realization_value,
+    realization_value: effectiveRealization,
     target_value: assessment.target_value,
     weight_percentage: assessment.weight_percentage,
     notes: assessment.notes,
@@ -150,7 +160,7 @@ async function upsertAssessment(
 
   let savedData: any = null
 
-  // 2. Update existing assessment or insert new assessment using explicit ID matching
+  // 2. Update existing assessment or insert new assessment
   if (existingId) {
     const { data, error: updateError } = await adminClient
       .from('t_kpi_assessments')
@@ -176,22 +186,21 @@ async function upsertAssessment(
       throw new Error(`Failed to save assessment: ${insertError.message}`)
     }
     savedData = data
+    if (existingMap && data?.id) {
+      const mainKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:main`
+      existingMap.set(mainKey, data.id)
+    }
   }
 
-  // 3. Handle Sub-Assessments if provided
-  if (assessment.sub_assessments && Array.isArray(assessment.sub_assessments)) {
-    let aggregateScore = 0
-    let aggregateRealization = 0
-
-    for (const sub of assessment.sub_assessments) {
+  // 3. Handle Sub-Assessments concurrently in parallel
+  if (hasSubs) {
+    const subPromises = assessment.sub_assessments.map(async (sub: any) => {
       const subScore = sub.score || 0
       const subRealization = sub.realization_value || 0
-      aggregateScore += subScore
-      aggregateRealization += subRealization
 
       let subExistingId = sub.id
+      const subKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:${sub.sub_indicator_id}`
       if (!subExistingId) {
-        const subKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:${sub.sub_indicator_id}`
         if (existingMap && existingMap.has(subKey)) {
           subExistingId = existingMap.get(subKey)
         } else {
@@ -236,37 +245,27 @@ async function upsertAssessment(
           throw new Error(`Failed to save sub-indicators: ${subUpdateError.message}`)
         }
       } else {
-        const { error: subInsertError } = await adminClient
+        const { data: newSubRow, error: subInsertError } = await adminClient
           .from('t_kpi_assessments')
           .insert(subData)
+          .select('id')
+          .single()
 
         if (subInsertError) {
           console.error('Sub-assessment insert error:', subInsertError)
           throw new Error(`Failed to save sub-indicators: ${subInsertError.message}`)
         }
+        if (newSubRow?.id && existingMap) {
+          existingMap.set(subKey, newSubRow.id)
+        }
       }
-    }
+    })
 
-    if (assessment.sub_assessments.length > 0) {
-      // 4. Sync main row realization value
-      const { error: syncError } = await adminClient
-        .from('t_kpi_assessments')
-        .update({
-          realization_value: aggregateRealization,
-          updated_at: new Date().toISOString()
-        })
-        .eq('employee_id', assessment.employee_id)
-        .eq('indicator_id', assessment.indicator_id)
-        .eq('period', assessment.period)
-        .eq('revenue_type', revType)
-        .is('sub_indicator_id', null)
+    await Promise.all(subPromises)
 
-      if (syncError) {
-        console.error('Main row score sync error:', syncError)
-      } else if (savedData) {
-        savedData.score = aggregateScore
-        savedData.realization_value = aggregateRealization
-      }
+    if (savedData) {
+      savedData.score = aggregateScore
+      savedData.realization_value = aggregateRealization
     }
   }
 
@@ -432,6 +431,66 @@ export async function POST(request: NextRequest) {
       existingMap.set(key, r.id)
     })
 
+    // Batch preload UMUM indicators/sub-indicators for units with kpi_schema_mode === 'different'
+    // This avoids querying the DB 4 times per indicator inside the loop!
+    const diffUnitIds = Array.from(new Set(
+      Array.from(empUnitMap.values())
+        .filter((e: any) => {
+          const uData = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units
+          return uData?.kpi_schema_mode === 'different'
+        })
+        .map((e: any) => e.unit_id)
+        .filter(Boolean)
+    ))
+
+    const bpjsToUmumIndMap = new Map<string, string>()
+    const bpjsToUmumSubMap = new Map<string, string>()
+    const bpjsSubCodeToUmumSubMap = new Map<string, string>()
+
+    if (diffUnitIds.length > 0 && applyToUmum) {
+      const [bpjsCatsRes, umumCatsRes] = await Promise.all([
+        adminClient.from('m_kpi_categories').select('id, unit_id, category').in('unit_id', diffUnitIds).eq('revenue_type', 'bpjs'),
+        adminClient.from('m_kpi_categories').select('id, unit_id, category').in('unit_id', diffUnitIds).eq('revenue_type', 'umum')
+      ])
+      const bpjsCats = bpjsCatsRes.data || []
+      const umumCats = umumCatsRes.data || []
+
+      const bpjsCatIds = bpjsCats.map((c: any) => c.id)
+      const umumCatIds = umumCats.map((c: any) => c.id)
+
+      if (bpjsCatIds.length > 0 && umumCatIds.length > 0) {
+        const [bpjsIndsRes, umumIndsRes] = await Promise.all([
+          adminClient.from('m_kpi_indicators').select('id, code, category_id, m_kpi_categories(category, unit_id), m_kpi_sub_indicators(id, code, name)').in('category_id', bpjsCatIds),
+          adminClient.from('m_kpi_indicators').select('id, code, category_id, m_kpi_categories(category, unit_id), m_kpi_sub_indicators(id, code, name)').in('category_id', umumCatIds)
+        ])
+
+        const bpjsInds = bpjsIndsRes.data || []
+        const umumInds = umumIndsRes.data || []
+
+        for (const bInd of bpjsInds) {
+          const bCat = (bInd.m_kpi_categories as any)?.category
+          const bUnit = (bInd.m_kpi_categories as any)?.unit_id
+
+          const uInd = umumInds.find((u: any) => {
+            const uCat = (u.m_kpi_categories as any)?.category
+            const uUnit = (u.m_kpi_categories as any)?.unit_id
+            return uUnit === bUnit && uCat === bCat && u.code === bInd.code
+          })
+
+          if (uInd) {
+            bpjsToUmumIndMap.set(bInd.id, uInd.id)
+            for (const bSub of (bInd.m_kpi_sub_indicators || [])) {
+              const uSub = (uInd.m_kpi_sub_indicators || []).find((s: any) => s.code === bSub.code || s.name === bSub.name)
+              if (uSub) {
+                bpjsToUmumSubMap.set(bSub.id, uSub.id)
+                bpjsSubCodeToUmumSubMap.set(`${uInd.id}:${bSub.code}`, uSub.id)
+              }
+            }
+          }
+        }
+      }
+    }
+
     const results = []
     for (const item of itemsToProcess) {
       const assessmentItem: Assessment = {
@@ -457,58 +516,29 @@ export async function POST(request: NextRequest) {
         const schemaMode = uData?.kpi_schema_mode || 'same'
 
         if (schemaMode === 'different' && empUnitData?.unit_id) {
-          // Find target UMUM indicator corresponding to BPJS indicator
-          const { data: bpjsInd } = await adminClient
-            .from('m_kpi_indicators')
-            .select('code, name, m_kpi_categories(category, category_name)')
-            .eq('id', assessmentItem.indicator_id)
-            .maybeSingle()
-
-          if (bpjsInd) {
-            const catCode = (bpjsInd as any).m_kpi_categories?.category
-            const { data: umumCat } = await adminClient
-              .from('m_kpi_categories')
-              .select('id')
-              .eq('unit_id', empUnitData.unit_id)
-              .eq('revenue_type', 'umum')
-              .eq('category', catCode)
-              .maybeSingle()
-
-            if (umumCat) {
-              const { data: umumInd } = await adminClient
-                .from('m_kpi_indicators')
-                .select('id')
-                .eq('category_id', umumCat.id)
-                .eq('code', bpjsInd.code)
-                .maybeSingle()
-
-              if (umumInd) {
-                let mappedSubAssessments = assessmentItem.sub_assessments
-                if (Array.isArray(assessmentItem.sub_assessments) && assessmentItem.sub_assessments.length > 0) {
-                  const { data: umumSubs } = await adminClient
-                    .from('m_kpi_sub_indicators')
-                    .select('id, code')
-                    .eq('indicator_id', umumInd.id)
-
-                  const subCodeMap = new Map((umumSubs || []).map((s: any) => [s.code, s.id]))
-                  mappedSubAssessments = assessmentItem.sub_assessments.map((s: any) => ({
-                    ...s,
-                    id: undefined,
-                    sub_indicator_id: subCodeMap.get(s.code) || s.sub_indicator_id
-                  }))
-                }
-
-                const copyItem: Assessment = {
-                  ...assessmentItem,
+          const targetUmumIndId = bpjsToUmumIndMap.get(assessmentItem.indicator_id)
+          if (targetUmumIndId) {
+            let mappedSubAssessments = assessmentItem.sub_assessments
+            if (Array.isArray(assessmentItem.sub_assessments) && assessmentItem.sub_assessments.length > 0) {
+              mappedSubAssessments = assessmentItem.sub_assessments.map((s: any) => {
+                const mappedSubId = bpjsToUmumSubMap.get(s.sub_indicator_id) || (s.code ? bpjsSubCodeToUmumSubMap.get(`${targetUmumIndId}:${s.code}`) : null)
+                return {
+                  ...s,
                   id: undefined,
-                  indicator_id: umumInd.id,
-                  revenue_type: 'umum',
-                  sub_assessments: mappedSubAssessments?.map((s: any) => ({ ...s, id: undefined }))
+                  sub_indicator_id: mappedSubId || s.sub_indicator_id
                 }
-                const savedUmum = await upsertAssessment(adminClient, copyItem, existingMap)
-                results.push(savedUmum)
-              }
+              })
             }
+
+            const copyItem: Assessment = {
+              ...assessmentItem,
+              id: undefined,
+              indicator_id: targetUmumIndId,
+              revenue_type: 'umum',
+              sub_assessments: mappedSubAssessments
+            }
+            const savedUmum = await upsertAssessment(adminClient, copyItem, existingMap)
+            results.push(savedUmum)
           }
         } else {
           // Standard 'same' schema mode: same indicator_id

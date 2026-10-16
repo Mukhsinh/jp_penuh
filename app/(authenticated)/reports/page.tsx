@@ -183,9 +183,30 @@ function IncentiveTable({ data }: { data: any[] }) {
               <td className="border p-2 font-medium min-w-[150px]">{safeRender(row.employee_name)}</td>
               <td className="border p-2 whitespace-nowrap">{safeRender(row.unit)}</td>
               <td className="border p-2 text-right font-mono text-gray-700">{typeof row.unit_proportion === 'string' && row.unit_proportion.includes('%') ? row.unit_proportion : (row.unit_proportion ? `${Number(row.unit_proportion).toFixed(2)}%` : '-')}</td>
-              <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p1_score) || 0, 2)}</td>
-              <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p2_score) || 0, 2)}</td>
-              <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p3_score) || 0, 2)}</td>
+              <td className="border p-2 text-right font-mono text-gray-700">
+                {formatNumber(Number(row.p1_score) || 0, 2)}
+                {Number(row.p1_priority || 0) > 0 && (
+                  <div className="text-[10px] text-purple-600 font-semibold whitespace-nowrap">
+                    (Prioritas: {new Intl.NumberFormat('id-ID').format(row.p1_priority)})
+                  </div>
+                )}
+              </td>
+              <td className="border p-2 text-right font-mono text-gray-700">
+                {formatNumber(Number(row.p2_score) || 0, 2)}
+                {Number(row.p2_priority || 0) > 0 && (
+                  <div className="text-[10px] text-purple-600 font-semibold whitespace-nowrap">
+                    (Prioritas: {new Intl.NumberFormat('id-ID').format(row.p2_priority)})
+                  </div>
+                )}
+              </td>
+              <td className="border p-2 text-right font-mono text-gray-700">
+                {formatNumber(Number(row.p3_score) || 0, 2)}
+                {Number(row.p3_priority || 0) > 0 && (
+                  <div className="text-[10px] text-purple-600 font-semibold whitespace-nowrap">
+                    (Prioritas: {new Intl.NumberFormat('id-ID').format(row.p3_priority)})
+                  </div>
+                )}
+              </td>
               <td className="border p-2 text-right font-bold font-mono text-blue-700">{formatNumber(Number(row.total_score) || 0, 2)}</td>
               <td className="border p-2 text-right font-semibold text-orange-600 font-mono">
                 {formatCurrency(Number(row.total_priority_score) || Number(row.total_activity_rupiah) || Number(row.total_activity) || 0, true, 2)}

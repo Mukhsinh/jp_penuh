@@ -337,15 +337,23 @@ export async function POST(request: NextRequest) {
 
           if (existing.assessment_details && row.assessment_details) {
             existing.assessment_details = [...existing.assessment_details, ...row.assessment_details];
+          } else {
+            existing.assessment_details = existing.assessment_details || row.assessment_details;
           }
           if (existing.p1_breakdown && row.p1_breakdown) {
             existing.p1_breakdown = [...existing.p1_breakdown, ...row.p1_breakdown];
+          } else {
+            existing.p1_breakdown = existing.p1_breakdown || row.p1_breakdown;
           }
           if (existing.p2_breakdown && row.p2_breakdown) {
             existing.p2_breakdown = [...existing.p2_breakdown, ...row.p2_breakdown];
+          } else {
+            existing.p2_breakdown = existing.p2_breakdown || row.p2_breakdown;
           }
           if (existing.p3_breakdown && row.p3_breakdown) {
             existing.p3_breakdown = [...existing.p3_breakdown, ...row.p3_breakdown];
+          } else {
+            existing.p3_breakdown = existing.p3_breakdown || row.p3_breakdown;
           }
         } else {
           mergedMap.set(id, { ...row });
@@ -399,6 +407,7 @@ export async function POST(request: NextRequest) {
       let empListQuery = supabase
         .from('m_employees')
         .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
+        .eq('is_active', true)
         .neq('role', 'superadmin')
         .neq('m_units.code', 'ADMIN')
 
@@ -442,10 +451,17 @@ export async function POST(request: NextRequest) {
             const hasUmum = new Set(assessedEmps.filter((a: any) => a.revenue_type === 'umum').map((a: any) => a.employee_id))
             const hasBpjs = new Set(assessedEmps.filter((a: any) => a.revenue_type === 'bpjs').map((a: any) => a.employee_id))
 
-            // Count employees with UMUM assessments, OR employees with BPJS assessments (global fallback)
             unitEmployees?.forEach((emp: any) => {
-              if (hasUmum.has(emp.id) || hasBpjs.has(emp.id)) {
-                validAssessedIds.add(emp.id)
+              const uData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+              const schemaMode = uData?.kpi_schema_mode || 'same'
+              if (schemaMode === 'different') {
+                if (hasUmum.has(emp.id)) {
+                  validAssessedIds.add(emp.id)
+                }
+              } else {
+                if (hasUmum.has(emp.id) || hasBpjs.has(emp.id)) {
+                  validAssessedIds.add(emp.id)
+                }
               }
             })
           } else {
@@ -573,17 +589,20 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     netPool = Number(poolData.revenue_umum || poolData.allocated_umum || poolData.net_pool || 0);
   }
 
-  // 2. Fetch active employees (filtered by unit/employee if specified)
+  // 2. Fetch active employees (fetch full unit to ensure accurate unitTotalScore and PIR calculations)
   let empQuery = supabase
     .from('m_employees')
     .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, use_same_proportion, kpi_schema_mode)')
     .eq('is_active', true)
     .neq('role', 'superadmin')
 
-  if (employeeId && employeeId !== 'all') {
-    empQuery = empQuery.eq('id', employeeId)
-  } else if (unitId && unitId !== 'all') {
+  if (unitId && unitId !== 'all') {
     empQuery = empQuery.eq('unit_id', unitId)
+  } else if (employeeId && employeeId !== 'all') {
+    const { data: targetEmp } = await supabase.from('m_employees').select('unit_id').eq('id', employeeId).maybeSingle()
+    if (targetEmp?.unit_id) {
+      empQuery = empQuery.eq('unit_id', targetEmp.unit_id)
+    }
   }
 
   const { data: allEmployees, error: allEmpError } = await empQuery.range(0, 9999)
@@ -674,10 +693,19 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     )
   ])
 
+  const empUnitMap = new Map<string, { unitId: string; schemaMode: string }>()
+  for (const emp of allEmployees || []) {
+    const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+    if (unitData?.id) {
+      empUnitMap.set(emp.id, { unitId: unitData.id, schemaMode: unitData.kpi_schema_mode })
+    }
+  }
+
   // Bidirectional fallback between UMUM and BPJS:
   // If generating report for one revenue type (e.g. BPJS or UMUM), for employees or indicators
   // that have NO assessment in that revenue type (or have priority/potongan assessments saved in the other revenue type),
   // fetch assessment data from the opposite revenue type as a fallback so calculations are accurate.
+  // NOTE: For units with kpi_schema_mode === 'different', do NOT fall back across revenues as indicator schemas are distinct!
   const oppositeRevenue = revenueType === 'bpjs' ? 'umum' : revenueType === 'umum' ? 'bpjs' : null
 
   if (oppositeRevenue && allEmployees && allEmployees.length > 0) {
@@ -705,6 +733,9 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
     // 1. Add main assessments from opposite revenue type if missing or if opposite has non-zero priority deduction
     for (const opp of oppositeMain) {
+      const uInfo = empUnitMap.get(opp.employee_id)
+      if (uInfo?.schemaMode === 'different') continue // Do not mix cross-revenue indicators for different schema units!
+
       const key = `${opp.employee_id}:${opp.indicator_id}`
       const existingIdx = allAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}` === key)
 
@@ -721,6 +752,9 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
     // 2. Add sub assessments from opposite revenue type if missing or if opposite has non-zero realization
     for (const oppSub of oppositeSub) {
+      const uInfo = empUnitMap.get(oppSub.employee_id)
+      if (uInfo?.schemaMode === 'different') continue // Do not mix cross-revenue indicators for different schema units!
+
       const key = `${oppSub.employee_id}:${oppSub.indicator_id}:${oppSub.sub_indicator_id}`
       const existingIdx = subAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}` === key)
 
@@ -787,38 +821,40 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       return validIds
     }
 
-    const empUnitMap = new Map<string, { unitId: string; schemaMode: string }>()
-    for (const emp of allEmployees) {
-      const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
-      if (unitData?.id) {
-        empUnitMap.set(emp.id, { unitId: unitData.id, schemaMode: unitData.kpi_schema_mode })
-      }
-    }
-
     const preFilterAllCount = allAssessments.length
     const preFilterSubCount = subAssessments.length
 
     allAssessments = allAssessments.filter((a: any) => {
       const info = empUnitMap.get(a.employee_id)
       if (!info) return true
+
+      const targetRev = a.revenue_type || revenueType
+      const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
+      if (validSet.size > 0 && !validSet.has(a.indicator_id)) {
+        return false
+      }
+
       const isPriority = a.m_kpi_indicators?.calculation_method === 'priority'
       const hasRealization = Math.abs(Number(a.realization_value || 0)) > 0
       if (isPriority || hasRealization) return true
 
-      const targetRev = a.revenue_type || revenueType
-      const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
-      return validSet.size === 0 || validSet.has(a.indicator_id)
+      return true
     })
 
     subAssessments = subAssessments.filter((s: any) => {
       const info = empUnitMap.get(s.employee_id)
       if (!info) return true
-      const isPriority = s.m_kpi_sub_indicators?.measurement_type === 'quantitative' || Math.abs(Number(s.realization_value || 0)) > 0
-      if (isPriority) return true
 
       const targetRev = s.revenue_type || revenueType
       const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
-      return validSet.size === 0 || validSet.has(s.indicator_id)
+      if (validSet.size > 0 && !validSet.has(s.indicator_id)) {
+        return false
+      }
+
+      const isPriority = s.m_kpi_sub_indicators?.measurement_type === 'quantitative' || Math.abs(Number(s.realization_value || 0)) > 0
+      if (isPriority) return true
+
+      return true
     })
 
     console.log(`[Report] Filtered main assessments: ${preFilterAllCount} -> ${allAssessments.length}, sub: ${preFilterSubCount} -> ${subAssessments.length}`)
@@ -955,7 +991,16 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
         const cat = (catObj?.category || '').trim().toUpperCase()
         const catUnit = catObj?.unit_id
         const belongsToUnit = !catUnit || !uId || catUnit === uId
-        return (cat === targetCat || cat.startsWith(targetCat)) && belongsToUnit
+        if (!belongsToUnit || (cat !== targetCat && !cat.startsWith(targetCat))) return false
+
+        const uInfo = empUnitMap.get(empId)
+        if (uInfo?.schemaMode === 'different') {
+          const catRev = catObj?.revenue_type
+          if (catRev && catRev !== 'all' && catRev !== revenueType) {
+            return false
+          }
+        }
+        return true
       })
 
       if (catAssessments.length === 0) {
@@ -1444,6 +1489,10 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   // Sort by full name for better readability
   report.sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''))
 
+  if (employeeId && employeeId !== 'all') {
+    return report.filter((r: any) => r.employee_id === employeeId)
+  }
+
   return report
 }
 
@@ -1745,6 +1794,7 @@ async function generateEmployeeSlipReport(supabase: any, period: string, unitId?
     }
 
     results.push({
+      employee_id: row.employee_id,
       employee_code: row.employee_code,
       nik: row.nik,
       employee_name: row.employee_name,
@@ -1759,15 +1809,19 @@ async function generateEmployeeSlipReport(supabase: any, period: string, unitId?
       p1_score: row.p1_score,
       p1_weighted: row.p1_score,
       p1_weight: p1Weight,
+      p1_priority: row.p1_priority || 0,
       p1_breakdown: buildBreakdown('P1'),
       p2_score: row.p2_score,
       p2_weighted: row.p2_score,
       p2_weight: p2Weight,
+      p2_priority: row.p2_priority || 0,
       p2_breakdown: buildBreakdown('P2'),
       p3_score: row.p3_score,
       p3_weighted: row.p3_score,
       p3_weight: p3Weight,
+      p3_priority: row.p3_priority || 0,
       p3_breakdown: buildBreakdown('P3'),
+      total_priority_score: row.total_priority_score || 0,
       total_score: row.total_score,
       pir_value: row.pir_value,
       total_activity: row.total_activity,
@@ -1785,6 +1839,7 @@ async function generateEmployeeSlipReport(supabase: any, period: string, unitId?
       tax_detail: row.tax_detail || '-',
       net_incentive: row.net_incentive,
       tax_mechanism_used: row.tax_mechanism_used,
+      assessment_details: details,
     })
   }
 

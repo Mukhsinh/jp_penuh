@@ -218,6 +218,7 @@ export default function AssessmentTable({
           onClose={handleCloseDialog}
           employee={selectedEmployee}
           period={period}
+          revenueType={revenueType}
           onSaved={handleAssessmentSaved}
         />
       )}

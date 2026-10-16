@@ -325,7 +325,7 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     const tableRows: any[] = []
     tableRows.push(['A.', incentiveLabel, ''])
     tableRows.push(['', '1. Insentif Berbasis Indeks (Total Skor × PIR)', formatCurrency(slip.index_incentive || 0)])
-    tableRows.push(['', '2. Insentif Berbasis Prioritas (Direct Payout)', formatCurrency(slip.totalActivityRupiah || 0)])
+    tableRows.push(['', '2. Insentif Berbasis Prioritas (Direct Payout)', formatCurrency(slip.totalActivityRupiah || slip.total_activity_rupiah || slip.total_priority_score || 0)])
 
     let nextNum = 3
     if (slip.guarantee_fee && slip.guarantee_fee > 0) {
@@ -647,7 +647,7 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
           : parseNum(item.unit_proportion),
         unitAllocation: parseNum(item.unit_allocation),
         unitTotalActivity: parseNum(item.unit_total_activity),
-        totalActivityRupiah: parseNum(item.total_activity_rupiah || item.total_activity),
+        totalActivityRupiah: parseNum(item.total_activity_rupiah || item.total_priority_score || item.total_activity),
         index_incentive: parseNum(item.index_incentive),
         guarantee_fee: parseNum(item.guarantee_fee),
         potongan: parseNum(item.potongan),

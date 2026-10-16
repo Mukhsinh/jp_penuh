@@ -115,6 +115,13 @@ export default function AssessmentFormDialog({
   const [kpiSchemaMode, setKpiSchemaMode] = useState<'same' | 'different'>('same')
   const [applyToUmum, setApplyToUmum] = useState<boolean>(true)
 
+  // Sync active revenue type when prop changes or dialog opens
+  useEffect(() => {
+    if (revenueType) {
+      setActiveRevenueType(revenueType)
+    }
+  }, [revenueType, open])
+
   // Fetch unit's KPI schema mode on mount/open
   useEffect(() => {
     async function fetchUnitSchemaMode() {
@@ -196,15 +203,15 @@ export default function AssessmentFormDialog({
             assessmentMap[indicatorId].sub_assessments.push({
               id: item.id,
               sub_indicator_id: item.sub_indicator_id,
-              realization_value: item.realization_value,
-              score: item.score || 0
+              realization_value: Number(item.realization_value) || 0,
+              score: Number(item.score) || 0
             })
           } else {
             // This is the main indicator row
             assessmentMap[indicatorId].id = item.id
-            assessmentMap[indicatorId].realization_value = item.realization_value
-            assessmentMap[indicatorId].achievement_percentage = item.achievement_percentage || 0
-            assessmentMap[indicatorId].score = item.score || 0
+            assessmentMap[indicatorId].realization_value = Number(item.realization_value) || 0
+            assessmentMap[indicatorId].achievement_percentage = Number(item.achievement_percentage) || 0
+            assessmentMap[indicatorId].score = Number(item.score) || 0
             assessmentMap[indicatorId].notes = item.notes || ''
           }
         })
@@ -381,12 +388,17 @@ export default function AssessmentFormDialog({
             weight_percentage: indicator.weight_percentage,
             notes: assessment.notes,
             revenue_type: activeRevenueType,
-            sub_assessments: assessment.sub_assessments.map(sub => ({
-              id: sub.id,
-              sub_indicator_id: sub.sub_indicator_id,
-              realization_value: sub.realization_value,
-              score: sub.score
-            }))
+            sub_assessments: assessment.sub_assessments.map(sub => {
+              const subConfig = indicator.sub_indicators?.find(s => s.id === sub.sub_indicator_id)
+              return {
+                id: sub.id,
+                sub_indicator_id: sub.sub_indicator_id,
+                code: subConfig?.code,
+                name: subConfig?.name,
+                realization_value: sub.realization_value,
+                score: sub.score
+              }
+            })
           }
         })
       )
@@ -639,8 +651,31 @@ export default function AssessmentFormDialog({
               const assessment = assessments[indicator.id]
               const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
               const indTarget = getIndicatorTarget(indicator)
-              const indRealisasi = assessment ? assessment.realization_value : 0
+              let indRealisasi = assessment ? assessment.realization_value : 0
               const isPriority = indicator.calculation_method === 'priority'
+
+              // For indicators with sub-indicators (e.g. BOR with 80% and 20% weights),
+              // use the weighted score calculated from sub-indicators to match report formula exactly.
+              if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
+                let calcSum = 0
+                let hasSubData = false
+                ;(assessment?.sub_assessments || []).forEach(sub => {
+                  const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+                  if (subConf) {
+                    hasSubData = true
+                    const w = isMedicalUnit ? 1 : (subConf.weight_percentage / 100)
+                    const subScore = (sub.score !== undefined && sub.score !== null && sub.score !== 0)
+                      ? sub.score
+                      : (Number(sub.realization_value) || 0)
+                    calcSum += subScore * w
+                  }
+                })
+                if (hasSubData) {
+                  indRealisasi = calcSum
+                } else if (assessment?.score !== undefined && assessment?.score !== null && assessment?.score !== 0) {
+                  indRealisasi = assessment.score
+                }
+              }
 
               if (!isPriority) {
                 if (category.is_weighted !== false) {
@@ -1028,18 +1063,26 @@ export default function AssessmentFormDialog({
                                         </div>
                                       ) : hasCriteria ? (
                                         <div className="flex flex-wrap gap-2 mt-1">
-                                          {sub.scoring_criteria.map((criterion, cIdx) => (
-                                            <Button
-                                              key={cIdx}
-                                              type="button"
-                                              variant={subRealization === criterion.score ? 'default' : 'outline'}
-                                              size="sm"
-                                              className="h-8 text-xs px-2"
-                                              onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
-                                            >
-                                              {criterion.label} ({criterion.score})
-                                            </Button>
-                                          ))}
+                                          {sub.scoring_criteria.map((criterion, cIdx) => {
+                                            const isSelected = Math.abs(Number(subRealization) - Number(criterion.score)) < 0.001
+                                            return (
+                                              <Button
+                                                key={cIdx}
+                                                type="button"
+                                                variant={isSelected ? 'default' : 'outline'}
+                                                size="sm"
+                                                className={cn(
+                                                  "h-8 text-xs px-2.5 font-medium transition-all",
+                                                  isSelected
+                                                    ? "bg-blue-600 text-white hover:bg-blue-700 border-blue-600 shadow-sm ring-2 ring-blue-400"
+                                                    : "bg-white text-gray-700 hover:bg-blue-50 hover:text-blue-600 border-gray-200"
+                                                )}
+                                                onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
+                                              >
+                                                {criterion.label} ({criterion.score})
+                                              </Button>
+                                            )
+                                          })}
                                         </div>
                                       ) : (
                                         <div className="space-y-1">

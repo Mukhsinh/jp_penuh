@@ -169,18 +169,22 @@ export async function GET(request: NextRequest) {
       const catToUnitMap = new Map(validCategories.map(c => [c.id, c.unit_id]))
 
       let indicatorCountMap: Record<string, number> = {}
+      let validIndicators: any[] = []
       if (validCategoryIds.length > 0) {
-        const { data: validIndicators } = await adminClient
+        const { data } = await adminClient
           .from('m_kpi_indicators')
           .select('id, category_id')
           .eq('is_active', true)
           .in('category_id', validCategoryIds)
 
-        validIndicators?.forEach((ind: any) => {
+        validIndicators = data || []
+        validIndicators.forEach((ind: any) => {
           const uId = catToUnitMap.get(ind.category_id) as string
           if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
         })
       }
+
+      const validIndicatorIds = new Set(validIndicators.map((i: any) => i.id))
 
       // Get existing assessments for this period and revenue_type (paginated to handle >1000 rows)
       const existingAssessments = await fetchAllRows(
@@ -192,10 +196,12 @@ export async function GET(request: NextRequest) {
 
       const assessedCountMap: Record<string, Set<string>> = {}
       existingAssessments?.forEach((ass: any) => {
-        if (!assessedCountMap[ass.employee_id]) {
-          assessedCountMap[ass.employee_id] = new Set()
+        if (validIndicatorIds.has(ass.indicator_id)) {
+          if (!assessedCountMap[ass.employee_id]) {
+            assessedCountMap[ass.employee_id] = new Set()
+          }
+          assessedCountMap[ass.employee_id].add(ass.indicator_id)
         }
-        assessedCountMap[ass.employee_id].add(ass.indicator_id)
       })
 
       // BPJS fallback for same-schema units when viewing UMUM:
@@ -216,10 +222,12 @@ export async function GET(request: NextRequest) {
             (q: any) => q.eq('period', period).eq('revenue_type', 'bpjs').in('employee_id', empsMissingUmum)
           )
           bpjsFallback?.forEach((ass: any) => {
-            if (!assessedCountMap[ass.employee_id]) {
-              assessedCountMap[ass.employee_id] = new Set()
+            if (validIndicatorIds.has(ass.indicator_id)) {
+              if (!assessedCountMap[ass.employee_id]) {
+                assessedCountMap[ass.employee_id] = new Set()
+              }
+              assessedCountMap[ass.employee_id].add(ass.indicator_id)
             }
-            assessedCountMap[ass.employee_id].add(ass.indicator_id)
           })
         }
       }
