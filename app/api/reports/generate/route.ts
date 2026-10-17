@@ -141,23 +141,37 @@ async function savePIRHistory(
   employeeCount: number
 ) {
   try {
-    const { error } = await supabase
+    const { data: existing } = await supabase
       .from('t_history_pir')
-      .upsert(
-        {
-          period,
-          unit_id: unitId,
-          unit_name: unitName,
-          net_pool_amount: netPoolAmount,
-          proportion_percentage: proportionPercentage,
-          allocated_for_unit: allocatedForUnit,
-          total_skor_kolektif: totalSkorKolektif,
-          pir_value: pirValue,
-          employee_count: employeeCount,
-        },
-        { onConflict: 'period,unit_id' }
-      )
-    if (error) console.error('Failed to save PIR history:', error.message)
+      .select('id')
+      .eq('period', period)
+      .eq('unit_id', unitId)
+      .maybeSingle()
+
+    const pirData = {
+      period,
+      unit_id: unitId,
+      unit_name: unitName,
+      net_pool_amount: netPoolAmount,
+      proportion_percentage: proportionPercentage,
+      allocated_for_unit: allocatedForUnit,
+      total_skor_kolektif: totalSkorKolektif,
+      pir_value: pirValue,
+      employee_count: employeeCount,
+    }
+
+    if (existing?.id) {
+      const { error: upErr } = await supabase
+        .from('t_history_pir')
+        .update(pirData)
+        .eq('id', existing.id)
+      if (upErr) console.error('Failed to update PIR history:', upErr.message)
+    } else {
+      const { error: inErr } = await supabase
+        .from('t_history_pir')
+        .insert(pirData)
+      if (inErr) console.error('Failed to insert PIR history:', inErr.message)
+    }
   } catch (err: any) {
     console.error('PIR history save error:', err.message)
   }
@@ -922,26 +936,27 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       const weight = Number(sub.m_kpi_sub_indicators?.weight_percentage || 0)
 
       const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
-      const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
+      const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority' ||
+        mainAsses?.m_kpi_indicators?.m_kpi_categories?.configuration_style === 'activity'
 
-      // If it's a Medical Unit or quantitative, weight acts as 1.
-      // Otherwise strictly adhere to weight, so a 0-weight item yields 0.
-      if (effectiveScore === 0 && Math.abs(Number(sub.realization_value)) > 0) {
-        if (isPriority) {
-          const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
-          const realVal = Number(sub.realization_value || 0)
-          // For qualitative/scoring priority indicators, realization_value holds the direct score
-          // chosen from scoring criteria (e.g. Rp 100.000 for Kepala Ruang, Rp 50.000 for MOD).
-          // If realVal is already the full nominal value (realVal >= subBase or realVal > 10),
-          // do NOT multiply by subBase to prevent squaring into billions (e.g. 100.000 * 100.000 = 10 milyar).
-          if (subBase > 1 && realVal < subBase && realVal <= 10) {
-            effectiveScore = realVal * subBase
-          } else {
-            effectiveScore = realVal
-          }
+      if (isPriority) {
+        const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
+        const realVal = Number(sub.score !== undefined && sub.score !== null && sub.score !== 0 ? sub.score : sub.realization_value || 0)
+        // For qualitative/scoring priority indicators, realization_value holds the direct score
+        // chosen from scoring criteria (e.g. Rp 100.000 for Kepala Ruang, Rp 50.000 for MOD).
+        // If realVal is already the full nominal value (realVal >= subBase or realVal > 10),
+        // do NOT multiply by subBase to prevent squaring into billions (e.g. 100.000 * 100.000 = 10 milyar).
+        if (subBase > 1 && realVal < subBase && realVal <= 10) {
+          effectiveScore = realVal * subBase
         } else {
-          effectiveScore = Number(sub.realization_value) * (isMed ? 1 : (weight / 100))
+          effectiveScore = realVal
         }
+      } else {
+        // Qualitative non-priority sub-indicator (e.g. BOR with sub-weights):
+        // Each sub-indicator's contribution to the indicator is subScore * (subWeight / 100)
+        // (in medical units, weight acts as 1)
+        const rawScore = Number(sub.score !== undefined && sub.score !== null && sub.score !== 0 ? sub.score : sub.realization_value || 0)
+        effectiveScore = rawScore * (isMed ? 1 : (weight / 100))
       }
     }
 
@@ -1031,7 +1046,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
           : (parseFloat(a.target_value) || 0)
         const calcMethod = a.m_kpi_indicators?.calculation_method || 'indexing'
 
-        const isPriority = calcMethod === 'priority'
+        const isPriority = calcMethod === 'priority' || firstCatObj?.configuration_style === 'activity'
         const isActivity = isPriority
 
         // Resolve effectiveScore: prefer sub-assessment aggregate, else if activity use volume*tariff, else fallback
@@ -1135,15 +1150,17 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const p2Res = calcCategoryScore('P2')
     const p3Res = calcCategoryScore('P3')
 
-    const p1 = Number(p1Res.indexScore.toFixed(2))
-    const p2 = Number(p2Res.indexScore.toFixed(2))
-    const p3 = Number(p3Res.indexScore.toFixed(2))
+    const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
 
-    const p1_priority = Number(p1Res.priorityScore.toFixed(2))
-    const p2_priority = Number(p2Res.priorityScore.toFixed(2))
-    const p3_priority = Number(p3Res.priorityScore.toFixed(2))
+    const p1 = round2(p1Res.indexScore)
+    const p2 = round2(p2Res.indexScore)
+    const p3 = round2(p3Res.indexScore)
 
-    const total_priority_score = Number((p1_priority + p2_priority + p3_priority).toFixed(2))
+    const p1_priority = round2(p1Res.priorityScore)
+    const p2_priority = round2(p2Res.priorityScore)
+    const p3_priority = round2(p3Res.priorityScore)
+
+    const total_priority_score = round2(p1_priority + p2_priority + p3_priority)
 
     // Catch-all for assessments in other categories to ensure they are added to assessmentDetails
     const remainingAssessments = empAssessments.filter((a: any) => {
@@ -1486,8 +1503,64 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     }
   }
 
+async function saveRemunerasiHasil(supabase: any, period: string, netPool: number, report: any[]) {
+  try {
+    let { data: remPeriode } = await supabase
+      .from('remunerasi_periode')
+      .select('id')
+      .eq('periode', period)
+      .maybeSingle()
+
+    if (!remPeriode?.id) {
+      const { data: newP } = await supabase
+        .from('remunerasi_periode')
+        .insert({
+          periode: period,
+          total_pagu: netPool || 0,
+          status: 'calculated',
+          description: `Periode Remunerasi ${period}`
+        })
+        .select('id')
+        .single()
+      remPeriode = newP
+    }
+
+    if (remPeriode?.id && Array.isArray(report) && report.length > 0) {
+      const periodeId = remPeriode.id
+      const payload = report.map(row => ({
+        periode_id: periodeId,
+        employee_id: row.employee_id,
+        total_langsung: Number(row.total_activity || 0),
+        total_poin_indeks: Number(row.total_score || 0),
+        konversi_indeks_rupiah: Number(row.index_incentive || 0),
+        bruto: Number(row.gross_incentive || 0),
+        pajak_nominal: Number(row.tax_amount || 0),
+        netto: Number(row.net_incentive || 0),
+        pir_apply: Number(row.pir_value || 0)
+      }))
+
+      // Batch in chunks of 200
+      const chunkSize = 200
+      for (let i = 0; i < payload.length; i += chunkSize) {
+        const chunk = payload.slice(i, i + chunkSize)
+        const { error } = await supabase
+          .from('remunerasi_hasil')
+          .upsert(chunk, { onConflict: 'periode_id,employee_id' })
+        if (error) console.error('Error batch upserting remunerasi_hasil chunk:', error.message)
+      }
+    }
+  } catch (err: any) {
+    console.error('Failed to save remunerasi_hasil:', err.message)
+  }
+}
+
   // Sort by full name for better readability
   report.sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''))
+
+  // Persist calculation results into remunerasi_hasil database table
+  if (!employeeId || employeeId === 'all') {
+    await saveRemunerasiHasil(supabase, period, Number(netPool || 0), report)
+  }
 
   if (employeeId && employeeId !== 'all') {
     return report.filter((r: any) => r.employee_id === employeeId)

@@ -1,27 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 
 export async function GET(request: NextRequest) {
     try {
         const supabase = await createClient()
 
         // Check authentication
-        const { data: { user }, error: authError } = await supabase.auth.getUser()
-        if (authError || !user) {
+        const user = await getAuthenticatedUser(supabase, request)
+        if (!user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
         const adminClient = await createAdminClient()
 
         // Get current user's employee record
-        const { data: currentEmployee } = await adminClient
+        let currentEmployee: any = null
+        const { data: byUserId } = await adminClient
             .from('m_employees')
             .select('id, role, unit_id')
             .eq('user_id', user.id)
             .maybeSingle()
 
+        if (byUserId) {
+            currentEmployee = byUserId
+        } else if (user.email) {
+            const { data: byEmail } = await adminClient
+                .from('m_employees')
+                .select('id, role, unit_id')
+                .eq('email', user.email)
+                .maybeSingle()
+            if (byEmail) currentEmployee = byEmail
+        }
+
+        const appRole = user.app_metadata?.role
+        const userRole = user.user_metadata?.role
+        const isSuperAdmin =
+            appRole === 'superadmin' ||
+            userRole === 'superadmin' ||
+            user.email === 'admin@sungaipenuh.com'
+
         if (!currentEmployee) {
-            return NextResponse.json({ error: 'Employee record not found' }, { status: 404 })
+            if (isSuperAdmin) {
+                currentEmployee = {
+                    id: user.id,
+                    role: 'superadmin',
+                    unit_id: '0'
+                }
+            } else {
+                return NextResponse.json({ error: 'Employee record not found' }, { status: 404 })
+            }
         }
 
         const { searchParams } = new URL(request.url)
@@ -56,15 +84,18 @@ export async function GET(request: NextRequest) {
         // A simplified approach is just sorting by created_at DESC from `t_kpi_assessments` 
         // where period != current_period to find the last time this employee was assessed.
 
-        // First, find the period of the last assessment
-        const { data: lastAssessment, error: lastError } = await supabase
+        const revenueType = searchParams.get('revenue_type') || 'bpjs'
+
+        // First, find the period of the last assessment for this revenue_type
+        const { data: lastAssessment, error: lastError } = await adminClient
             .from('t_kpi_assessments')
             .select('period')
             .eq('employee_id', employeeId)
             .neq('period', currentPeriod)
+            .or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
             .order('created_at', { ascending: false })
             .limit(1)
-            .single()
+            .maybeSingle()
 
         if (lastError || !lastAssessment) {
             // It's okay if they have no previous assessment
@@ -73,12 +104,14 @@ export async function GET(request: NextRequest) {
 
         const previousPeriod = lastAssessment.period;
 
-        // Then fetch all assessments for that previous period
-        const { data, error } = await supabase
+        // Then fetch all assessments for that previous period and revenue_type
+        const { data, error } = await adminClient
             .from('t_kpi_assessments')
             .select('*')
             .eq('employee_id', employeeId)
             .eq('period', previousPeriod)
+            .or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+            .order('created_at')
 
         if (error) {
             throw new Error(`Failed to fetch previous assessments: ${error.message}`)

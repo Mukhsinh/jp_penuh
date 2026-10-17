@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, Search, Filter, RefreshCw, BarChart3, AlertCircle, Copy, Loader2 } from 'lucide-react'
+import { Plus, Search, Filter, RefreshCw, BarChart3, AlertCircle, Copy, Loader2, CheckCircle2, Lock, Unlock, ShieldCheck, Clock } from 'lucide-react'
+import { toast } from 'sonner'
 import AssessmentTable from './AssessmentTable'
 import AssessmentReports from './AssessmentReports'
 import AddAssessmentPeriodDialog from './AddAssessmentPeriodDialog'
@@ -53,6 +54,59 @@ export default function AssessmentPageContent({
     completion_rate: 0
   })
   const [copyingUnit, setCopyingUnit] = useState(false)
+  const [isPeriodApproved, setIsPeriodApproved] = useState(false)
+  const [allPeriodStatuses, setAllPeriodStatuses] = useState<{ period: string; status: string; isApproved: boolean }[]>([])
+  const [approvalLoading, setApprovalLoading] = useState(false)
+
+  // Load period approval status from backend
+  const loadPeriodApproval = async (periodToCheck?: string) => {
+    const p = periodToCheck || selectedPeriod
+    if (!p) return
+    try {
+      const res = await fetch(`/api/assessment/period-approval?period=${p}`)
+      if (res.ok) {
+        const data = await res.json()
+        setIsPeriodApproved(data.currentPeriod?.isApproved || false)
+        if (data.allPeriods) {
+          setAllPeriodStatuses(data.allPeriods)
+        }
+      }
+    } catch (e) {
+      console.error('Error loading period approval:', e)
+    }
+  }
+
+  // Handle Approve or Unapprove by Superadmin
+  const handleTogglePeriodApproval = async (action: 'approve' | 'unapprove') => {
+    if (!selectedPeriod) return
+    const isApprove = action === 'approve'
+    const confirmMsg = isApprove
+      ? `Apakah Anda yakin ingin MENYETUJUI periode ${selectedPeriod}?\n\nSetelah disetujui, penilaian KPI untuk seluruh unit akan DIKUNCI dan tidak dapat diubah lagi.`
+      : `Apakah Anda yakin ingin MEMBATALKAN persetujuan periode ${selectedPeriod}?\n\nKunci penilaian akan dibuka kembali sehingga penilaian dapat diedit.`
+    if (!window.confirm(confirmMsg)) return
+
+    setApprovalLoading(true)
+    try {
+      const res = await fetch('/api/assessment/period-approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period: selectedPeriod, action })
+      })
+      const result = await res.json()
+      if (res.ok && result.success) {
+        toast.success(result.message)
+        setIsPeriodApproved(result.isApproved)
+        await loadPeriodApproval(selectedPeriod)
+        await loadEmployees()
+      } else {
+        toast.error(result.error || 'Gagal memperbarui status persetujuan periode')
+      }
+    } catch (err: any) {
+      toast.error('Terjadi kesalahan sistem: ' + (err.message || 'Coba lagi'))
+    } finally {
+      setApprovalLoading(false)
+    }
+  }
 
   // Load periods and units with retry logic
   const loadInitialData = async (retryCount = 0) => {
@@ -199,6 +253,7 @@ export default function AssessmentPageContent({
         await loadEmployees()
         // Small delay to avoid concurrent auth.getUser() calls hitting rate limit
         await loadSummary()
+        await loadPeriodApproval(selectedPeriod)
       }
       loadData()
     } else {
@@ -210,16 +265,22 @@ export default function AssessmentPageContent({
   const handleRefresh = () => {
     loadEmployees()
     loadSummary()
+    loadPeriodApproval()
   }
 
   // Handle assessment completion (callback from table)
   const handleAssessmentComplete = () => {
     loadEmployees()
     loadSummary()
+    loadPeriodApproval()
   }
 
   const handleBulkCopy = async () => {
     if (!selectedPeriod) return
+    if (isPeriodApproved) {
+      alert(`Periode ${selectedPeriod} telah disetujui dan berstatus terkunci. Penilaian tidak dapat disalin atau diubah.`)
+      return
+    }
 
     // 1. Identify unit_id
     let unitId = ''
@@ -398,6 +459,112 @@ export default function AssessmentPageContent({
         </Card>
       </div>
 
+      {/* Superadmin Period Approval Notification & Action Banner */}
+      {currentEmployee.role === 'superadmin' && selectedPeriod && (
+        <div className={`p-4 rounded-2xl border transition-all shadow-sm ${
+          isPeriodApproved
+            ? 'bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 border-emerald-200'
+            : 'bg-gradient-to-r from-blue-50 via-indigo-50 to-sky-50 border-blue-200'
+        }`}>
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className={`p-2.5 rounded-xl ${
+                isPeriodApproved ? 'bg-emerald-600 text-white shadow-md' : 'bg-blue-600 text-white shadow-md'
+              }`}>
+                {isPeriodApproved ? <Lock className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm md:text-base font-bold text-gray-900">
+                    {isPeriodApproved ? `Periode ${selectedPeriod}: Disetujui & Terkunci` : `Persetujuan Periode ${selectedPeriod}`}
+                  </h3>
+                  <Badge className={isPeriodApproved ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white'}>
+                    {isPeriodApproved ? 'Terkunci' : 'Terbuka'}
+                  </Badge>
+                </div>
+                <p className="text-xs text-gray-600 mt-1 max-w-2xl leading-relaxed">
+                  {isPeriodApproved ? (
+                    <>Periode ini <strong>telah disetujui</strong> oleh Superadmin. Seluruh penilaian KPI terkunci (Read-Only) dan tidak dapat ditambah atau diubah oleh siapapun.</>
+                  ) : (
+                    <>Progres penilaian saat ini: <strong>{summary.completed}</strong> dari <strong>{summary.total_employees}</strong> pegawai ({summary.completion_rate}%). {summary.completion_rate === 100 ? 'Penilaian telah selesai secara keseluruhan. Anda dapat menyetujui periode ini untuk mengunci hasil penilaian.' : 'Anda dapat menyetujui periode ini sekarang atau setelah penilaian selesai.'}</>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end md:self-auto flex-shrink-0">
+              {isPeriodApproved ? (
+                <Button
+                  onClick={() => handleTogglePeriodApproval('unapprove')}
+                  disabled={approvalLoading}
+                  variant="outline"
+                  size="sm"
+                  className="bg-white text-red-700 border-red-300 hover:bg-red-50 hover:text-red-800 font-semibold shadow-sm"
+                >
+                  {approvalLoading ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Unlock className="h-4 w-4 mr-1.5 text-red-600" />}
+                  Batal Setujui (Buka Kunci)
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => handleTogglePeriodApproval('approve')}
+                  disabled={approvalLoading}
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-md"
+                >
+                  {approvalLoading ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-1.5" />}
+                  Setujui Periode (Kunci)
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preview Status Periode (Sudah Disetujui & Belum Disetujui) */}
+      {allPeriodStatuses.length > 0 && (
+        <Card className="bg-slate-50/70 border-slate-200">
+          <CardContent className="py-2.5 px-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-slate-500" />
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                  Preview Status Periode:
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {allPeriodStatuses.map(p => {
+                  const isCurrent = p.period === selectedPeriod
+                  return (
+                    <button
+                      key={p.period}
+                      type="button"
+                      onClick={() => setSelectedPeriod(p.period)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                        isCurrent ? 'ring-2 ring-blue-500 shadow-sm' : 'hover:opacity-80'
+                      } ${
+                        p.isApproved
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}
+                    >
+                      {p.isApproved ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                      ) : (
+                        <Clock className="h-3.5 w-3.5 text-amber-600" />
+                      )}
+                      <span>Periode {p.period}:</span>
+                      <strong className="underline">
+                        {p.isApproved ? 'Disetujui' : 'Belum Disetujui'}
+                      </strong>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Main Content with Tabs */}
       <Tabs defaultValue="assessment" className="space-y-4">
         <TabsList>
@@ -423,8 +590,9 @@ export default function AssessmentPageContent({
                     onClick={handleBulkCopy}
                     variant="outline"
                     size="sm"
-                    disabled={loading || copyingUnit}
-                    className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                    disabled={loading || copyingUnit || isPeriodApproved}
+                    title={isPeriodApproved ? 'Periode ini telah disetujui (Terkunci)' : undefined}
+                    className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50"
                   >
                     {copyingUnit ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Copy className="h-4 w-4 mr-2" />}
                     Salin Penilaian Unit
@@ -525,6 +693,7 @@ export default function AssessmentPageContent({
                   period={selectedPeriod}
                   revenueType={activeRevenueType}
                   loading={loading}
+                  isApproved={isPeriodApproved}
                   onAssessmentComplete={handleAssessmentComplete}
                 />
               ) : (

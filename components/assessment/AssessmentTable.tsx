@@ -27,6 +27,7 @@ interface AssessmentTableProps {
   employees: AssessmentStatus[]
   period: string
   revenueType?: 'bpjs' | 'umum'
+  isApproved?: boolean
   loading: boolean
   onAssessmentComplete: () => void
 }
@@ -35,6 +36,7 @@ export default function AssessmentTable({
   employees,
   period,
   revenueType = 'bpjs',
+  isApproved = false,
   loading,
   onAssessmentComplete
 }: AssessmentTableProps) {
@@ -191,7 +193,12 @@ export default function AssessmentTable({
                       onClick={() => handleAssess(employee)}
                       className="gap-2"
                     >
-                      {employee.status === 'Belum Dinilai' ? (
+                      {isApproved ? (
+                        <>
+                          <Eye className="h-4 w-4 text-emerald-600" />
+                          Lihat (Terkunci)
+                        </>
+                      ) : employee.status === 'Belum Dinilai' ? (
                         <>
                           <ClipboardCheck className="h-4 w-4" />
                           Nilai
@@ -219,6 +226,7 @@ export default function AssessmentTable({
           employee={selectedEmployee}
           period={period}
           revenueType={revenueType}
+          isApproved={isApproved}
           onSaved={handleAssessmentSaved}
         />
       )}

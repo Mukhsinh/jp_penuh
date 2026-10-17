@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 
+export const dynamic = 'force-dynamic'
+
 interface Assessment {
   id?: string
   employee_id: string
@@ -153,6 +155,9 @@ async function upsertAssessment(
     target_value: assessment.target_value,
     weight_percentage: assessment.weight_percentage,
     notes: assessment.notes,
+    score: (assessment.score !== undefined && assessment.score !== null)
+      ? assessment.score
+      : (hasSubs ? aggregateScore : (assessment.score ?? effectiveRealization)),
     assessor_id: assessment.assessor_id,
     revenue_type: revType,
     updated_at: new Date().toISOString()
@@ -226,6 +231,7 @@ async function upsertAssessment(
         sub_indicator_id: sub.sub_indicator_id,
         period: assessment.period,
         realization_value: subRealization,
+        score: subScore,
         target_value: 0,
         weight_percentage: 0,
         notes: sub.notes || '',
@@ -259,6 +265,39 @@ async function upsertAssessment(
           existingMap.set(subKey, newSubRow.id)
         }
       }
+
+      // Mirror sub-indicator to t_realization
+      try {
+        const { data: existingSubReal } = await adminClient
+          .from('t_realization')
+          .select('id')
+          .eq('employee_id', assessment.employee_id)
+          .eq('indicator_id', assessment.indicator_id)
+          .eq('sub_indicator_id', sub.sub_indicator_id)
+          .eq('period', assessment.period)
+          .eq('revenue_type', revType)
+          .maybeSingle()
+
+        const subRealPayload = {
+          employee_id: assessment.employee_id,
+          indicator_id: assessment.indicator_id,
+          sub_indicator_id: sub.sub_indicator_id,
+          period: assessment.period,
+          realization_value: subRealization,
+          score: subScore,
+          notes: sub.notes || null,
+          created_by: assessment.assessor_id || null,
+          revenue_type: revType
+        }
+
+        if (existingSubReal?.id) {
+          await adminClient.from('t_realization').update(subRealPayload).eq('id', existingSubReal.id)
+        } else {
+          await adminClient.from('t_realization').insert(subRealPayload)
+        }
+      } catch (srErr) {
+        console.warn('Mirror sub to t_realization error:', srErr)
+      }
     })
 
     await Promise.all(subPromises)
@@ -267,6 +306,40 @@ async function upsertAssessment(
       savedData.score = aggregateScore
       savedData.realization_value = aggregateRealization
     }
+  }
+
+  // Mirror main indicator row to t_realization
+  try {
+    const { data: existingReal } = await adminClient
+      .from('t_realization')
+      .select('id')
+      .eq('employee_id', assessment.employee_id)
+      .eq('indicator_id', assessment.indicator_id)
+      .eq('period', assessment.period)
+      .eq('revenue_type', revType)
+      .is('sub_indicator_id', null)
+      .maybeSingle()
+
+    const realPayload = {
+      employee_id: assessment.employee_id,
+      indicator_id: assessment.indicator_id,
+      sub_indicator_id: null,
+      period: assessment.period,
+      realization_value: savedData?.realization_value ?? assessmentData.realization_value,
+      achievement_percentage: assessmentData.achievement_percentage,
+      score: savedData?.score ?? assessmentData.score,
+      notes: assessment.notes || null,
+      created_by: assessment.assessor_id || null,
+      revenue_type: revType
+    }
+
+    if (existingReal?.id) {
+      await adminClient.from('t_realization').update(realPayload).eq('id', existingReal.id)
+    } else {
+      await adminClient.from('t_realization').insert(realPayload)
+    }
+  } catch (rErr) {
+    console.warn('Mirror main to t_realization error:', rErr)
   }
 
   return savedData
@@ -332,7 +405,11 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to fetch assessments: ${fetchErr.message}`)
     }
 
-    return NextResponse.json({ assessments: assessments || [] })
+    return NextResponse.json({ assessments: assessments || [] }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, max-age=0, must-revalidate'
+      }
+    })
   } catch (error: any) {
     console.error('Assessment GET error:', error)
     return NextResponse.json(
@@ -400,12 +477,24 @@ export async function POST(request: NextRequest) {
 
     const { data: poolCheck } = await adminClient
       .from('t_pool')
-      .select('period')
+      .select('period, status')
       .eq('period', samplePeriod)
       .maybeSingle()
 
     if (!poolCheck) {
       return NextResponse.json({ error: `Periode ${samplePeriod} belum memiliki pool pendapatan` }, { status: 400 })
+    }
+
+    const { data: remCheck } = await adminClient
+      .from('remunerasi_periode')
+      .select('status')
+      .eq('periode', samplePeriod)
+      .maybeSingle()
+
+    if (poolCheck.status === 'approved' || remCheck?.status === 'approved') {
+      return NextResponse.json({
+        error: `Periode ${samplePeriod} telah disetujui oleh Superadmin dan berstatus terkunci. Penilaian tidak dapat diubah.`
+      }, { status: 403 })
     }
 
     // Optimization: Batch fetch employee details & unit information
@@ -520,14 +609,18 @@ export async function POST(request: NextRequest) {
           if (targetUmumIndId) {
             let mappedSubAssessments = assessmentItem.sub_assessments
             if (Array.isArray(assessmentItem.sub_assessments) && assessmentItem.sub_assessments.length > 0) {
-              mappedSubAssessments = assessmentItem.sub_assessments.map((s: any) => {
-                const mappedSubId = bpjsToUmumSubMap.get(s.sub_indicator_id) || (s.code ? bpjsSubCodeToUmumSubMap.get(`${targetUmumIndId}:${s.code}`) : null)
-                return {
-                  ...s,
-                  id: undefined,
-                  sub_indicator_id: mappedSubId || s.sub_indicator_id
-                }
-              })
+              mappedSubAssessments = assessmentItem.sub_assessments
+                .map((s: any) => {
+                  const mappedSubId = bpjsToUmumSubMap.get(s.sub_indicator_id) || (s.code ? bpjsSubCodeToUmumSubMap.get(`${targetUmumIndId}:${s.code}`) : null)
+                  // Skip sub-indicators that can't be mapped - don't insert BPJS sub_indicator_id into UMUM rows
+                  if (!mappedSubId) return null
+                  return {
+                    ...s,
+                    id: undefined,
+                    sub_indicator_id: mappedSubId
+                  }
+                })
+                .filter(Boolean)
             }
 
             const copyItem: Assessment = {
@@ -554,6 +647,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Insert notification into t_notification
+    try {
+      if (user?.id) {
+        const periodName = itemsToProcess[0]?.period || ''
+        await adminClient.from('t_notification').insert({
+          user_id: user.id,
+          title: 'Penilaian KPI Tersimpan',
+          message: `Penilaian KPI untuk periode ${periodName} telah berhasil disimpan ke database.`,
+          type: 'general',
+          link: '/assessment',
+          read: false
+        })
+      }
+    } catch (notifErr) {
+      console.warn('Failed to insert assessment notification:', notifErr)
+    }
+
     return NextResponse.json({ assessments: results })
   } catch (error: any) {
     console.error('Assessment POST error:', error)
@@ -569,8 +679,8 @@ export async function PUT(request: NextRequest) {
     const supabase = await createClient()
 
     // Check authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const user = await getAuthenticatedUser(supabase, request)
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 

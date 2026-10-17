@@ -42,17 +42,48 @@ function LoginForm() {
     try {
       const supabase = createClient()
 
-      const { data: auth, error: authErr } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+      let normalizedEmail = email.trim().toLowerCase()
+      if (normalizedEmail === 'admin' || normalizedEmail === 'superadmin') {
+        normalizedEmail = 'admin@sungaipenuh.com'
+      } else if (normalizedEmail.endsWith('@sungaipenuh.local')) {
+        normalizedEmail = normalizedEmail.replace('@sungaipenuh.local', '@sungaipenuh.com')
+      } else if (!normalizedEmail.includes('@')) {
+        normalizedEmail = `${normalizedEmail}@sungaipenuh.com`
+      }
+
+      // Proactively clear any stale cookies before signing in
+      try {
+        await supabase.auth.signOut()
+      } catch (e) {
+        // ignore
+      }
+
+      let { data: auth, error: authErr } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
         password,
       })
+
+      // Graceful fallback for superadmin if user enters Adminpenuh123 or admin123 interchangeably
+      if (authErr && normalizedEmail === 'admin@sungaipenuh.com') {
+        const altPassword = password === 'admin123' ? 'Adminpenuh123' : (password === 'Adminpenuh123' ? 'admin123' : null)
+        if (altPassword) {
+          const retry = await supabase.auth.signInWithPassword({
+            email: normalizedEmail,
+            password: altPassword,
+          })
+          if (!retry.error) {
+            auth = retry.data
+            authErr = null
+          }
+        }
+      }
 
       if (authErr) {
         let msg = authErr.message
         if (msg === 'Invalid login credentials') {
-          msg = 'Email atau kata sandi salah'
+          msg = 'Email/Username atau kata sandi salah'
         }
-        setError(msg || 'Email atau kata sandi salah')
+        setError(msg || 'Email/Username atau kata sandi salah')
         setIsLoading(false)
         return
       }
@@ -116,19 +147,21 @@ function LoginForm() {
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          {/* Email Field */}
+          {/* Email / Username Field */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">
-              Email
+              Email atau Username
             </label>
             <div className="relative">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" size={16} />
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="nama@email.com"
+                placeholder="nama@email.com atau username/kode"
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
                 className="w-full h-11 pl-12 pr-4 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium transition-all focus:outline-none focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50/50"
               />
             </div>

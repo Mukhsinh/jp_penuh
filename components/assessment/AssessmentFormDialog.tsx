@@ -91,6 +91,7 @@ interface AssessmentFormDialogProps {
   employee: AssessmentStatus
   period: string
   revenueType?: 'bpjs' | 'umum'
+  isApproved?: boolean
   onSaved: () => void
 }
 
@@ -100,6 +101,7 @@ export default function AssessmentFormDialog({
   employee,
   period,
   revenueType = 'bpjs',
+  isApproved = false,
   onSaved
 }: AssessmentFormDialogProps) {
   const [categories, setCategories] = useState<KPICategory[]>([])
@@ -142,28 +144,12 @@ export default function AssessmentFormDialog({
     fetchUnitSchemaMode()
   }, [open, employee?.unit_id])
 
-  // Load KPI indicators and existing assessments
+  // Load KPI indicators and existing assessments in coordinated sequence to avoid race conditions
   useEffect(() => {
     if (open && employee) {
-      loadKPIIndicators(activeRevenueType)
-      loadExistingAssessments(activeRevenueType)
+      loadAssessmentData(activeRevenueType)
     }
   }, [open, employee, activeRevenueType])
-
-  const loadKPIIndicators = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
-    try {
-      const response = await fetch(`/api/assessment/indicators?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
-      if (response.ok) {
-        const data = await response.json()
-        setCategories(data.indicators || [])
-      } else {
-        setError('Failed to load KPI indicators')
-      }
-    } catch (error) {
-      setError('Error loading KPI indicators')
-      console.error('Error loading KPI indicators:', error)
-    }
-  }
 
   const getIndicatorTarget = (indicator: KPIIndicator) => {
     if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
@@ -176,12 +162,30 @@ export default function AssessmentFormDialog({
     return indicator.target_value || 0
   }
 
-  const loadExistingAssessments = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
+  const loadAssessmentData = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
     setLoading(true)
+    setError(null)
     try {
-      const response = await fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
-      if (response.ok) {
-        const data = await response.json()
+      const [indicatorsResponse, assessmentsResponse] = await Promise.all([
+        fetch(`/api/assessment/indicators?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`, {
+          cache: 'no-store'
+        }),
+        fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`, {
+          cache: 'no-store'
+        })
+      ])
+
+      let loadedCategories: KPICategory[] = []
+      if (indicatorsResponse.ok) {
+        const indData = await indicatorsResponse.json()
+        loadedCategories = indData.indicators || []
+        setCategories(loadedCategories)
+      } else {
+        setError('Gagal memuat indikator KPI')
+      }
+
+      if (assessmentsResponse.ok) {
+        const data = await assessmentsResponse.json()
         const assessmentMap: Record<string, AssessmentData> = {}
 
         data.assessments?.forEach((item: any) => {
@@ -199,15 +203,29 @@ export default function AssessmentFormDialog({
           }
 
           if (item.sub_indicator_id) {
-            // This is a sub-assessment row
-            assessmentMap[indicatorId].sub_assessments.push({
-              id: item.id,
-              sub_indicator_id: item.sub_indicator_id,
-              realization_value: Number(item.realization_value) || 0,
-              score: Number(item.score) || 0
-            })
+            // Sub-assessment row
+            const existingSubIndex = assessmentMap[indicatorId].sub_assessments.findIndex(
+              s => s.sub_indicator_id === item.sub_indicator_id
+            )
+            const subRealiz = Number(item.realization_value) || 0
+            const subSc = Number(item.score) || subRealiz
+            if (existingSubIndex >= 0) {
+              assessmentMap[indicatorId].sub_assessments[existingSubIndex] = {
+                id: item.id,
+                sub_indicator_id: item.sub_indicator_id,
+                realization_value: subRealiz,
+                score: subSc
+              }
+            } else {
+              assessmentMap[indicatorId].sub_assessments.push({
+                id: item.id,
+                sub_indicator_id: item.sub_indicator_id,
+                realization_value: subRealiz,
+                score: subSc
+              })
+            }
           } else {
-            // This is the main indicator row
+            // Main indicator row
             assessmentMap[indicatorId].id = item.id
             assessmentMap[indicatorId].realization_value = Number(item.realization_value) || 0
             assessmentMap[indicatorId].achievement_percentage = Number(item.achievement_percentage) || 0
@@ -216,10 +234,45 @@ export default function AssessmentFormDialog({
           }
         })
 
+        // Reconcile with loadedCategories: guarantees sub_assessments entries exist
+        // for all configured sub-indicators and populates orphan main rows
+        const allIndicators = loadedCategories.flatMap(c => c.indicators)
+        for (const indicator of allIndicators) {
+          if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
+            const assessment = assessmentMap[indicator.id]
+            if (assessment) {
+              // Populate sub_assessments from main row realization_value if sub_assessments is empty
+              if (assessment.sub_assessments.length === 0 && assessment.realization_value !== 0) {
+                if (indicator.sub_indicators.length === 1) {
+                  const sub = indicator.sub_indicators[0]
+                  assessment.sub_assessments.push({
+                    sub_indicator_id: sub.id,
+                    realization_value: assessment.realization_value,
+                    score: assessment.score || assessment.realization_value
+                  })
+                }
+              }
+
+              // Also ensure sub_assessments exist for every sub_indicator
+              for (const sub of indicator.sub_indicators) {
+                const subEntry = assessment.sub_assessments.find(s => s.sub_indicator_id === sub.id)
+                if (!subEntry && indicator.sub_indicators.length === 1 && assessment.realization_value) {
+                  assessment.sub_assessments.push({
+                    sub_indicator_id: sub.id,
+                    realization_value: assessment.realization_value,
+                    score: assessment.score || assessment.realization_value
+                  })
+                }
+              }
+            }
+          }
+        }
+
         setAssessments(assessmentMap)
       }
     } catch (error) {
-      console.error('Error loading existing assessments:', error)
+      console.error('Error loading assessment data:', error)
+      setError('Terjadi kesalahan saat memuat data penilaian')
     } finally {
       setLoading(false)
     }
@@ -294,7 +347,7 @@ export default function AssessmentFormDialog({
       const index = subAssessments.findIndex(s => s.sub_indicator_id === subIndicatorId)
 
       if (index >= 0) {
-        subAssessments[index] = { sub_indicator_id: subIndicatorId, realization_value: realizationValue, score }
+        subAssessments[index] = { id: subAssessments[index].id, sub_indicator_id: subIndicatorId, realization_value: realizationValue, score }
       } else {
         subAssessments.push({ sub_indicator_id: subIndicatorId, realization_value: realizationValue, score })
       }
@@ -378,6 +431,22 @@ export default function AssessmentFormDialog({
             sub_assessments: []
           }
 
+          // Ensure ALL configured sub-indicators are included, not just ones in state.
+          // This guarantees the backend creates/updates rows for every sub-indicator.
+          const fullSubAssessments = (indicator.sub_indicators || []).map(subConfig => {
+            const existing = assessment.sub_assessments.find(s => s.sub_indicator_id === subConfig.id)
+            const fallbackVal = (!existing && indicator.sub_indicators.length === 1 && assessment.realization_value !== undefined) ? assessment.realization_value : 0
+            const fallbackScore = (!existing && indicator.sub_indicators.length === 1 && (assessment.score || assessment.realization_value)) ? (assessment.score || assessment.realization_value) : 0
+            return {
+              id: existing?.id,
+              sub_indicator_id: subConfig.id,
+              code: subConfig.code,
+              name: subConfig.name,
+              realization_value: existing?.realization_value ?? fallbackVal,
+              score: existing?.score ?? fallbackScore
+            }
+          })
+
           return {
             id: assessment.id,
             employee_id: employee.employee_id,
@@ -387,18 +456,9 @@ export default function AssessmentFormDialog({
             target_value: getIndicatorTarget(indicator),
             weight_percentage: indicator.weight_percentage,
             notes: assessment.notes,
+            score: assessment.score,
             revenue_type: activeRevenueType,
-            sub_assessments: assessment.sub_assessments.map(sub => {
-              const subConfig = indicator.sub_indicators?.find(s => s.id === sub.sub_indicator_id)
-              return {
-                id: sub.id,
-                sub_indicator_id: sub.sub_indicator_id,
-                code: subConfig?.code,
-                name: subConfig?.name,
-                realization_value: sub.realization_value,
-                score: sub.score
-              }
-            })
+            sub_assessments: fullSubAssessments
           }
         })
       )
@@ -436,7 +496,7 @@ export default function AssessmentFormDialog({
     setCopyingPrevious(true)
     setError(null)
     try {
-      const response = await fetch(`/api/assessment/previous?employee_id=${employee.employee_id}&current_period=${period}`)
+      const response = await fetch(`/api/assessment/previous?employee_id=${employee.employee_id}&current_period=${period}&revenue_type=${activeRevenueType}`)
       if (response.ok) {
         const data = await response.json()
         if (data.assessments && data.assessments.length > 0) {
@@ -470,6 +530,26 @@ export default function AssessmentFormDialog({
             }
           })
 
+          // Ensure single sub-indicator rows get reconciled if only main row existed
+          const allIndicators = categories.flatMap(c => c.indicators)
+          for (const indicator of allIndicators) {
+            if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
+              const assessment = assessmentMap[indicator.id]
+              if (assessment) {
+                if (assessment.sub_assessments.length === 0 && assessment.realization_value !== undefined) {
+                  if (indicator.sub_indicators.length === 1) {
+                    const sub = indicator.sub_indicators[0]
+                    assessment.sub_assessments.push({
+                      sub_indicator_id: sub.id,
+                      realization_value: assessment.realization_value,
+                      score: assessment.score || assessment.realization_value
+                    })
+                  }
+                }
+              }
+            }
+          }
+
           // Update current state with copied values
           setAssessments((prev) => ({ ...prev, ...assessmentMap }))
 
@@ -492,6 +572,20 @@ export default function AssessmentFormDialog({
                 sub_assessments: []
               }
 
+              // Ensure ALL configured sub-indicators are included
+              const fullSubAssessments = (indicator.sub_indicators || []).map(subConfig => {
+                const existing = assessment.sub_assessments.find(s => s.sub_indicator_id === subConfig.id)
+                const fallbackVal = (!existing && indicator.sub_indicators.length === 1 && assessment.realization_value !== undefined) ? assessment.realization_value : 0
+                const fallbackScore = (!existing && indicator.sub_indicators.length === 1 && (assessment.score || assessment.realization_value)) ? (assessment.score || assessment.realization_value) : 0
+                return {
+                  sub_indicator_id: subConfig.id,
+                  code: subConfig.code,
+                  name: subConfig.name,
+                  realization_value: existing?.realization_value ?? fallbackVal,
+                  score: existing?.score ?? fallbackScore
+                }
+              })
+
               return {
                 employee_id: employee.employee_id,
                 indicator_id: indicator.id,
@@ -500,7 +594,8 @@ export default function AssessmentFormDialog({
                 target_value: getIndicatorTarget(indicator),
                 weight_percentage: indicator.weight_percentage,
                 notes: assessment.notes,
-                sub_assessments: assessment.sub_assessments,
+                score: assessment.score,
+                sub_assessments: fullSubAssessments,
                 revenue_type: activeRevenueType,
                 assessor_id: '' // API will handle this from session
               }
@@ -570,7 +665,7 @@ export default function AssessmentFormDialog({
               size="sm"
               className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 font-semibold shadow-sm"
               onClick={handleCopyPrevious}
-              disabled={saving || copyingPrevious || loading}
+              disabled={saving || copyingPrevious || loading || isApproved}
             >
               {copyingPrevious ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -610,6 +705,15 @@ export default function AssessmentFormDialog({
           )}
         </DialogHeader>
 
+        {isApproved && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-3 text-xs text-emerald-800 font-semibold shadow-sm">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0" />
+            <div>
+              <span>Periode <strong>{period}</strong> telah disetujui oleh Superadmin dan berstatus terkunci. Penilaian hanya dapat dilihat (Read-Only).</span>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-2">
             <AlertCircle className="h-5 w-5 text-red-600" />
@@ -629,13 +733,25 @@ export default function AssessmentFormDialog({
           categories.forEach(category => {
             category.indicators.forEach(indicator => {
               const assessment = assessments[indicator.id]
-              const isPriority = indicator.calculation_method === 'priority'
-              const isActivity = category.configuration_style === 'activity'
-
+              const isPriority = indicator.calculation_method === 'priority' || category.configuration_style === 'activity'
               if (isPriority) {
-                totalSkorPrioritas += assessment ? assessment.realization_value : 0;
-              } else if (isActivity) {
-                totalSkorPrioritas += assessment ? assessment.score : 0;
+                if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
+                  let subPrioSum = 0
+                  let hasSubData = false
+                  ;(assessment?.sub_assessments || []).forEach(sub => {
+                    const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+                    if (subConf) {
+                      hasSubData = true
+                      const subVal = (sub.score !== undefined && sub.score !== null && sub.score !== 0)
+                        ? sub.score
+                        : (Number(sub.realization_value) || 0)
+                      subPrioSum += subVal
+                    }
+                  })
+                  totalSkorPrioritas += hasSubData ? subPrioSum : (assessment?.score || assessment?.realization_value || 0)
+                } else {
+                  totalSkorPrioritas += assessment ? (assessment.score || assessment.realization_value || 0) : 0
+                }
               }
             })
           })
@@ -949,9 +1065,12 @@ export default function AssessmentFormDialog({
                               <div className="grid gap-3">
                                 {indicator.sub_indicators.map((sub) => {
                                   const subAssessment = assessment?.sub_assessments?.find(sa => sa.sub_indicator_id === sub.id)
-                                  const subRealization = subAssessment?.realization_value || 0
+                                  // Fallback: if no sub_assessment found and indicator has 1 sub-indicator,
+                                  // use the main assessment's realization_value (orphan main row scenario)
+                                  const subRealization = subAssessment?.realization_value
+                                    ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.realization_value) ? assessment.realization_value : 0)
                                   const isQuantitative = sub.measurement_type === 'quantitative'
-                                  let subScore = subAssessment?.score || 0
+                                  let subScore = subAssessment?.score ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.score) ? assessment.score : 0)
 
                                   if (subAssessment && !subAssessment.score && subRealization > 0) {
                                     if (isQuantitative) {
@@ -974,7 +1093,15 @@ export default function AssessmentFormDialog({
                                             {isQuantitative && ` • Satuan: ${sub.measurement_unit || 'Volume'} • Tarif Dasar / Indeks: ${(sub.base_index_value || 0) >= 1000 ? 'Rp ' + (sub.base_index_value || 0).toLocaleString('id-ID') : formatDecimal(sub.base_index_value || 0, 4)}`}
                                           </p>
                                         </div>
-                                        <Badge variant="outline" className="bg-white text-xs">
+                                        <Badge 
+                                          variant="outline" 
+                                          className={cn(
+                                            "text-xs transition-colors",
+                                            (subAssessment !== undefined || subRealization > 0)
+                                              ? "bg-blue-100 text-blue-800 border-blue-300 font-semibold"
+                                              : "bg-white text-gray-500 border-gray-200"
+                                          )}
+                                        >
                                           {isQuantitative ? `Volume: ${subRealization}` : `Skor: ${subScore.toFixed(2)}`}
                                         </Badge>
                                       </div>
@@ -1062,27 +1189,42 @@ export default function AssessmentFormDialog({
                                           )}
                                         </div>
                                       ) : hasCriteria ? (
-                                        <div className="flex flex-wrap gap-2 mt-1">
-                                          {sub.scoring_criteria.map((criterion, cIdx) => {
-                                            const isSelected = Math.abs(Number(subRealization) - Number(criterion.score)) < 0.001
-                                            return (
-                                              <Button
-                                                key={cIdx}
-                                                type="button"
-                                                variant={isSelected ? 'default' : 'outline'}
-                                                size="sm"
-                                                className={cn(
-                                                  "h-8 text-xs px-2.5 font-medium transition-all",
-                                                  isSelected
-                                                    ? "bg-blue-600 text-white hover:bg-blue-700 border-blue-600 shadow-sm ring-2 ring-blue-400"
-                                                    : "bg-white text-gray-700 hover:bg-blue-50 hover:text-blue-600 border-gray-200"
-                                                )}
-                                                onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
-                                              >
-                                                {criterion.label} ({criterion.score})
-                                              </Button>
-                                            )
-                                          })}
+                                        <div className="flex flex-col gap-1.5 mt-1">
+                                          {(() => {
+                                            const anyMatched = sub.scoring_criteria.some(c => Math.abs(Number(subRealization) - Number(c.score)) < 0.001)
+                                            if (!anyMatched && subRealization > 0) {
+                                              return (
+                                                <div className="w-full mb-1">
+                                                  <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                                                    Nilai sebelumnya: {subRealization} (pilih salah satu opsi untuk memperbarui)
+                                                  </span>
+                                                </div>
+                                              )
+                                            }
+                                            return null
+                                          })()}
+                                          <div className="flex flex-wrap gap-2">
+                                            {sub.scoring_criteria.map((criterion, cIdx) => {
+                                              const isSelected = Math.abs(Number(subRealization) - Number(criterion.score)) < 0.001
+                                              return (
+                                                <Button
+                                                  key={cIdx}
+                                                  type="button"
+                                                  variant={isSelected ? 'default' : 'outline'}
+                                                  size="sm"
+                                                  className={cn(
+                                                    "h-8 text-xs px-2.5 font-medium transition-all",
+                                                    isSelected
+                                                      ? "bg-blue-600 text-white hover:bg-blue-700 border-blue-600 shadow-sm ring-2 ring-blue-400 font-semibold"
+                                                      : "bg-white text-gray-700 hover:bg-blue-50 hover:text-blue-600 border-gray-200"
+                                                  )}
+                                                  onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
+                                                >
+                                                  {criterion.label} ({criterion.score})
+                                                </Button>
+                                              )
+                                            })}
+                                          </div>
                                         </div>
                                       ) : (
                                         <div className="space-y-1">
@@ -1150,14 +1292,21 @@ export default function AssessmentFormDialog({
               • Penilaian ini khusus untuk Pendapatan UMUM (Pool UMUM & Proporsi UMUM)
             </div>
           )}
-          <div className="flex gap-2 self-end sm:self-auto">
+          <div className="flex gap-2 items-center self-end sm:self-auto">
             <Button variant="outline" onClick={onClose} disabled={saving}>
-              Batal
+              {isApproved ? 'Tutup' : 'Batal'}
             </Button>
-            <Button onClick={handleSave} disabled={saving || loading}>
-              <Save className="h-4 w-4 mr-2" />
-              {saving ? 'Menyimpan...' : 'Simpan Penilaian'}
-            </Button>
+            {isApproved ? (
+              <div className="flex items-center gap-1.5 px-3 py-2 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-md text-xs font-bold">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                Periode Terkunci (Disetujui)
+              </div>
+            ) : (
+              <Button onClick={handleSave} disabled={saving || loading}>
+                <Save className="h-4 w-4 mr-2" />
+                {saving ? 'Menyimpan...' : 'Simpan Penilaian'}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

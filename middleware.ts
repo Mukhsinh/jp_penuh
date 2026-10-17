@@ -151,6 +151,14 @@ export async function middleware(request: NextRequest) {
           }
         }
       }
+
+      // If user still not authenticated and refresh token is invalid, delete stale auth cookies
+      if (userError && !user && (userError.message?.includes('Refresh Token Not Found') || userError.message?.includes('token is expired'))) {
+        const authCookies = request.cookies.getAll().filter(c => c.name.includes('auth-token') || c.name.includes('access-token'))
+        authCookies.forEach(c => {
+          response.cookies.delete(c.name)
+        })
+      }
     }
 
     const session = user ? { user } : null
@@ -163,6 +171,13 @@ export async function middleware(request: NextRequest) {
       if (session && pathname === '/login') {
         const dashboardUrl = new URL('/dashboard', request.url)
         return NextResponse.redirect(dashboardUrl)
+      }
+      // If visiting /login without valid session, ensure stale auth cookies are pruned
+      if (pathname === '/login' && !session) {
+        const authCookies = request.cookies.getAll().filter(c => c.name.includes('auth-token') || c.name.includes('access-token'))
+        authCookies.forEach(c => {
+          response.cookies.delete(c.name)
+        })
       }
       return response
     }
