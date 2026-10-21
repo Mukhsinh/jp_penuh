@@ -54,6 +54,7 @@ export default function AssessmentPageContent({
     completion_rate: 0
   })
   const [copyingUnit, setCopyingUnit] = useState(false)
+  const [copyingBpjsToUmum, setCopyingBpjsToUmum] = useState(false)
   const [isPeriodApproved, setIsPeriodApproved] = useState(false)
   const [allPeriodStatuses, setAllPeriodStatuses] = useState<{ period: string; status: string; isApproved: boolean }[]>([])
   const [approvalLoading, setApprovalLoading] = useState(false)
@@ -344,6 +345,84 @@ export default function AssessmentPageContent({
     }
   }
 
+  const handleCopyBpjsToUmum = async () => {
+    if (!selectedPeriod) return
+    if (isPeriodApproved) {
+      alert(`Periode ${selectedPeriod} telah disetujui dan berstatus terkunci. Penilaian tidak dapat disalin atau diubah.`)
+      return
+    }
+
+    // Identify target unit
+    let unitId = ''
+    let unitName = ''
+
+    if (currentEmployee.role === 'unit_manager') {
+      unitId = currentEmployee.unit_id
+      unitName = 'unit Anda'
+    } else {
+      if (unitFilter && unitFilter !== 'all') {
+        unitId = unitFilter
+        const found = availableUnits.find(u => u.id === unitFilter)
+        unitName = found ? found.name : 'unit terpilih'
+      } else {
+        const uniqueUnits = Array.from(new Set(filteredEmployees.map(e => JSON.stringify({ id: e.unit_id, name: e.unit_name }))))
+        if (uniqueUnits.length === 0) {
+          alert('Tidak ada pegawai yang ditemukan.')
+          return
+        }
+        if (uniqueUnits.length !== 1) {
+          alert('Mohon filter unit spesifik terlebih dahulu pada pilihan unit agar sistem dapat melakukan penyalinan penilaian BPJS ke UMUM untuk unit tersebut.')
+          return
+        }
+        const unitData = JSON.parse(uniqueUnits[0])
+        unitId = unitData.id
+        unitName = unitData.name
+      }
+    }
+
+    const confirmMsg = `Konfirmasi: Salin penilaian KPI pegawai di ${unitName} dari jenis pendapatan BPJS ke Pendapatan UMUM untuk periode ${selectedPeriod}?\n\n` +
+      `Ketentuan:\n` +
+      `• Penilaian KPI akan disalin sama persis ke KPI Pendapatan UMUM.\n` +
+      `• Indeks PRIORITAS TIDAK disalin (dikecualikan sesuai ketentuan sistem).\n` +
+      `• Penilaian manual tetap dapat dilakukan atau diubah seperti biasa setelah penyalinan.\n` +
+      `• Penilaian UMUM yang sudah ada di periode ini akan diperbarui.`
+
+    if (!confirm(confirmMsg)) {
+      return
+    }
+
+    setCopyingBpjsToUmum(true)
+    try {
+      const response = await fetch('/api/assessment/copy-bpjs-to-umum', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unit_id: unitId,
+          period: selectedPeriod
+        })
+      })
+
+      const data = await response.json()
+      if (response.ok && data.success) {
+        toast.success(data.message || 'Penyalinan BPJS ke UMUM berhasil!')
+        // If on BPJS tab, switch to UMUM so user can immediately verify copied results
+        if (activeRevenueType === 'bpjs') {
+          setActiveRevenueType('umum')
+        }
+        handleRefresh()
+      } else {
+        toast.error('Gagal: ' + (data.error || 'Terjadi kesalahan'))
+        alert('Gagal menyalin: ' + (data.error || 'Terjadi kesalahan'))
+      }
+    } catch (err: any) {
+      console.error('Copy BPJS to UMUM error:', err)
+      toast.error('Terjadi kesalahan jaringan atau sistem.')
+      alert('Terjadi kesalahan sistem saat menyalin penilaian BPJS ke UMUM.')
+    } finally {
+      setCopyingBpjsToUmum(false)
+    }
+  }
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -585,19 +664,30 @@ export default function AssessmentPageContent({
                     Kelola penilaian KPI untuk pegawai di periode {selectedPeriod}
                   </CardDescription>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    onClick={handleCopyBpjsToUmum}
+                    variant="outline"
+                    size="sm"
+                    disabled={loading || copyingUnit || copyingBpjsToUmum || isPeriodApproved}
+                    title={isPeriodApproved ? 'Periode ini telah disetujui (Terkunci)' : 'Salin penilaian KPI dari jenis BPJS ke UMUM untuk seluruh pegawai unit ini (tanpa indeks prioritas)'}
+                    className="bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-50 font-medium"
+                  >
+                    {copyingBpjsToUmum ? <Loader2 className="h-4 w-4 mr-2 animate-spin text-amber-600" /> : <Copy className="h-4 w-4 mr-2 text-amber-600" />}
+                    Salin BPJS ke UMUM
+                  </Button>
                   <Button
                     onClick={handleBulkCopy}
                     variant="outline"
                     size="sm"
-                    disabled={loading || copyingUnit || isPeriodApproved}
+                    disabled={loading || copyingUnit || copyingBpjsToUmum || isPeriodApproved}
                     title={isPeriodApproved ? 'Periode ini telah disetujui (Terkunci)' : undefined}
                     className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50"
                   >
                     {copyingUnit ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Copy className="h-4 w-4 mr-2" />}
                     Salin Penilaian Unit
                   </Button>
-                  <Button onClick={handleRefresh} variant="outline" size="sm" disabled={loading || copyingUnit}>
+                  <Button onClick={handleRefresh} variant="outline" size="sm" disabled={loading || copyingUnit || copyingBpjsToUmum}>
                     <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                     Refresh
                   </Button>
