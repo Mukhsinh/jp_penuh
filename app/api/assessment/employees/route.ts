@@ -140,8 +140,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (userRole === 'unit_manager' && userUnitId) {
+      // Unit manager is strictly restricted to their own assigned unit
       empQuery = empQuery.eq('unit_id', userUnitId)
-    } else if (userRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all') {
+    } else if (requestedUnitId && requestedUnitId !== 'all') {
       empQuery = empQuery.eq('unit_id', requestedUnitId)
     }
 
@@ -273,9 +274,6 @@ export async function GET(request: NextRequest) {
       // Exclude SUPERADMIN unit by id or name
       if (adminUnitInfo && emp.unit_id === adminUnitInfo.id) return false
       if (emp.unit_name?.toUpperCase() === 'SUPERADMIN') return false
-      if (userRole === 'unit_manager' && emp.unit_id !== userUnitId) {
-        return false
-      }
       return true
     })
 

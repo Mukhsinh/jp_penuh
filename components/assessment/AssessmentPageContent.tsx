@@ -41,9 +41,8 @@ export default function AssessmentPageContent({
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [availableUnits, setAvailableUnits] = useState<{ id: string, name: string }[]>(initialAvailableUnits)
-  const [unitFilter, setUnitFilter] = useState<string>(
-    currentEmployee.role === 'superadmin' ? 'all' : (currentEmployee.role === 'unit_manager' ? currentEmployee.unit_id : 'all')
-  )
+  const isUnitManager = currentEmployee.role === 'unit_manager' && currentEmployee.unit_id && currentEmployee.unit_id !== 'all'
+  const [unitFilter, setUnitFilter] = useState<string>(isUnitManager ? currentEmployee.unit_id : 'all')
   const [isAddPeriodDialogOpen, setIsAddPeriodDialogOpen] = useState(false)
   const [summary, setSummary] = useState({
     total_employees: 0,
@@ -287,18 +286,23 @@ export default function AssessmentPageContent({
     let unitId = ''
     let unitName = ''
 
-    if (currentEmployee.role === 'unit_manager') {
+    if (unitFilter && unitFilter !== 'all') {
+      unitId = unitFilter
+      const found = availableUnits.find(u => u.id === unitFilter)
+      unitName = found ? found.name : 'unit terpilih'
+    } else if (currentEmployee.role === 'unit_manager' && currentEmployee.unit_id && currentEmployee.unit_id !== 'all') {
       unitId = currentEmployee.unit_id
-      unitName = 'unit Anda'
+      const found = availableUnits.find(u => u.id === currentEmployee.unit_id)
+      unitName = found ? found.name : 'unit Anda'
     } else {
-      // For superadmin, check if the current view is focused on one unit
+      // Check if the current view is focused on one unit
       const uniqueUnits = Array.from(new Set(filteredEmployees.map(e => JSON.stringify({ id: e.unit_id, name: e.unit_name }))))
       if (uniqueUnits.length === 0) {
         alert('Tidak ada pegawai untuk disalin.')
         return
       }
       if (uniqueUnits.length !== 1) {
-        alert('Mohon filter pencarian berdasarkan unit spesifik terlebih dahulu agar sistem dapat melakukan penyalinan massal untuk unit tersebut.')
+        alert('Mohon pilih unit spesifik pada dropdown filter unit terlebih dahulu agar sistem dapat melakukan penyalinan massal untuk unit tersebut.')
         return
       }
       const unitData = JSON.parse(uniqueUnits[0])
@@ -356,28 +360,27 @@ export default function AssessmentPageContent({
     let unitId = ''
     let unitName = ''
 
-    if (currentEmployee.role === 'unit_manager') {
+    if (unitFilter && unitFilter !== 'all') {
+      unitId = unitFilter
+      const found = availableUnits.find(u => u.id === unitFilter)
+      unitName = found ? found.name : 'unit terpilih'
+    } else if (currentEmployee.role === 'unit_manager' && currentEmployee.unit_id && currentEmployee.unit_id !== 'all') {
       unitId = currentEmployee.unit_id
-      unitName = 'unit Anda'
+      const found = availableUnits.find(u => u.id === currentEmployee.unit_id)
+      unitName = found ? found.name : 'unit Anda'
     } else {
-      if (unitFilter && unitFilter !== 'all') {
-        unitId = unitFilter
-        const found = availableUnits.find(u => u.id === unitFilter)
-        unitName = found ? found.name : 'unit terpilih'
-      } else {
-        const uniqueUnits = Array.from(new Set(filteredEmployees.map(e => JSON.stringify({ id: e.unit_id, name: e.unit_name }))))
-        if (uniqueUnits.length === 0) {
-          alert('Tidak ada pegawai yang ditemukan.')
-          return
-        }
-        if (uniqueUnits.length !== 1) {
-          alert('Mohon filter unit spesifik terlebih dahulu pada pilihan unit agar sistem dapat melakukan penyalinan penilaian BPJS ke UMUM untuk unit tersebut.')
-          return
-        }
-        const unitData = JSON.parse(uniqueUnits[0])
-        unitId = unitData.id
-        unitName = unitData.name
+      const uniqueUnits = Array.from(new Set(filteredEmployees.map(e => JSON.stringify({ id: e.unit_id, name: e.unit_name }))))
+      if (uniqueUnits.length === 0) {
+        alert('Tidak ada pegawai yang ditemukan.')
+        return
       }
+      if (uniqueUnits.length !== 1) {
+        alert('Mohon filter unit spesifik terlebih dahulu pada pilihan unit agar sistem dapat melakukan penyalinan penilaian BPJS ke UMUM untuk unit tersebut.')
+        return
+      }
+      const unitData = JSON.parse(uniqueUnits[0])
+      unitId = unitData.id
+      unitName = unitData.name
     }
 
     const confirmMsg = `Konfirmasi: Salin penilaian KPI pegawai di ${unitName} dari jenis pendapatan BPJS ke Pendapatan UMUM untuk periode ${selectedPeriod}?\n\n` +
@@ -707,8 +710,8 @@ export default function AssessmentPageContent({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4">
-                  {/* Unit Filter - Only for Superadmin */}
-                  {currentEmployee.role === 'superadmin' && (
+                  {/* Unit Filter */}
+                  {currentEmployee.role === 'superadmin' ? (
                     <div className="flex items-center gap-2">
                       <Filter className="h-4 w-4 text-gray-400" />
                       <Select value={unitFilter} onValueChange={setUnitFilter}>
@@ -724,6 +727,11 @@ export default function AssessmentPageContent({
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-slate-100 dark:bg-slate-800 rounded-md border text-sm font-medium text-slate-700 dark:text-slate-200">
+                      <Filter className="h-4 w-4 text-blue-600" />
+                      <span>Unit: <strong>{availableUnits.find(u => u.id === currentEmployee.unit_id)?.name || 'Unit Anda'}</strong></span>
                     </div>
                   )}
 
@@ -823,6 +831,7 @@ export default function AssessmentPageContent({
           <AssessmentReports
             availablePeriods={availablePeriods}
             selectedPeriod={selectedPeriod}
+            currentEmployee={currentEmployee}
           />
         </TabsContent>
       </Tabs>

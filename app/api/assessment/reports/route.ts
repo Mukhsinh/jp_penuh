@@ -111,6 +111,7 @@ async function getAvailablePeriods(supabase: any) {
 
 async function getAvailableUnits(supabase: any, currentEmp: any) {
   const userRole = currentEmp?.role
+  const userUnitId = currentEmp?.unit_id
 
   let query = supabase
     .from('m_units')
@@ -118,9 +119,9 @@ async function getAvailableUnits(supabase: any, currentEmp: any) {
     .eq('is_active', true)
     .order('name')
 
-  // If unit manager, only show their unit
-  if (userRole === 'unit_manager' && currentEmp?.unit_id) {
-    query = query.eq('id', currentEmp.unit_id)
+  // Unit Manager can only see their own unit
+  if (userRole === 'unit_manager' && userUnitId && userUnitId !== 'all') {
+    query = query.eq('id', userUnitId)
   }
 
   const { data, error } = await query
@@ -141,6 +142,9 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const userRole = currentEmp?.role
   const userUnitId = currentEmp?.unit_id
 
+  // Enforce unit isolation: unit managers can strictly query their own unit only
+  const effectiveUnitId = (userRole === 'unit_manager' && userUnitId) ? userUnitId : unitId
+
   // Build base query for employees
   let employeeQuery = supabase
     .from('m_employees')
@@ -148,11 +152,9 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
     .eq('is_active', true)
     .neq('role', 'superadmin')
 
-  // Apply unit filtering based on role
-  if (userRole === 'unit_manager' && userUnitId) {
-    employeeQuery = employeeQuery.eq('unit_id', userUnitId)
-  } else if (unitId && unitId !== 'all') {
-    employeeQuery = employeeQuery.eq('unit_id', unitId)
+  // Apply unit filtering
+  if (effectiveUnitId && effectiveUnitId !== 'all') {
+    employeeQuery = employeeQuery.eq('unit_id', effectiveUnitId)
   }
 
   const { data: employeesData, error: employeeError } = await employeeQuery
@@ -251,9 +253,7 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
     .neq('m_employees.role', 'superadmin')
 
   // Apply same unit filtering
-  if (userRole === 'unit_manager' && userUnitId) {
-    assessmentQuery = assessmentQuery.eq('m_employees.unit_id', userUnitId)
-  } else if (unitId && unitId !== 'all') {
+  if (unitId && unitId !== 'all') {
     assessmentQuery = assessmentQuery.eq('m_employees.unit_id', unitId)
   }
 

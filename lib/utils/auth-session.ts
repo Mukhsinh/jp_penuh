@@ -175,10 +175,8 @@ export function setupAuthErrorHandler() {
 
     // Only listen for events
     supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        if (window.location.pathname !== '/login') {
-          clearAuthStorage(true)
-        }
+      if (event === 'SIGNED_OUT' && window.location.pathname === '/login') {
+        clearAuthStorage(true)
       }
     })
   } catch (err) {

@@ -82,6 +82,11 @@ const nextConfig = {
         destination: '/dashboard',
         permanent: false,
       },
+      {
+        source: '/assesment',
+        destination: '/assessment',
+        permanent: false,
+      },
     ]
   },
 }

@@ -236,14 +236,22 @@ export async function POST(request: NextRequest) {
         const bNormCode = normalizeKey(bInd.code)
         const bNormName = normalizeKey(bInd.name)
 
-        // Find matching UMUM indicator in same category (P1/P2/P3), matching code or name
-        const uInd = umumIndicators.find(u => {
+        // Find matching UMUM indicator in same category (P1/P2/P3), matching name first, then code
+        let uInd = umumIndicators.find(u => {
           const uCatType = umumCatMap.get(u.category_id)
           if (uCatType !== bCatType) return false
-          const uNormCode = normalizeKey(u.code)
           const uNormName = normalizeKey(u.name)
-          return (uNormCode && uNormCode === bNormCode) || (uNormName && uNormName === bNormName)
+          return uNormName && uNormName === bNormName
         })
+
+        if (!uInd) {
+          uInd = umumIndicators.find(u => {
+            const uCatType = umumCatMap.get(u.category_id)
+            if (uCatType !== bCatType) return false
+            const uNormCode = normalizeKey(u.code)
+            return uNormCode && uNormCode === bNormCode
+          })
+        }
 
         if (uInd) {
           indicatorMapping.set(bInd.id, {
@@ -274,12 +282,20 @@ export async function POST(request: NextRequest) {
           const bSubCode = normalizeKey(bSub.code)
           const bSubName = normalizeKey(bSub.name)
 
-          const uSub = umumSubs.find((s: any) => {
+          // Match sub-indicator by name first, then code
+          let uSub = umumSubs.find((s: any) => {
             if (s.indicator_id !== uIndInfo.id) return false
-            const sCode = normalizeKey(s.code)
             const sName = normalizeKey(s.name)
-            return (sCode && sCode === bSubCode) || (sName && sName === bSubName)
+            return sName && sName === bSubName
           })
+
+          if (!uSub) {
+            uSub = umumSubs.find((s: any) => {
+              if (s.indicator_id !== uIndInfo.id) return false
+              const sCode = normalizeKey(s.code)
+              return sCode && sCode === bSubCode
+            })
+          }
 
           if (uSub) {
             subIndicatorMapping.set(bSub.id, uSub.id)
@@ -301,6 +317,17 @@ export async function POST(request: NextRequest) {
           weight_percentage: ind.weight_percentage ?? 0
         })
       }
+    }
+
+    // For 'different' schema mode, clean up obsolete rows that were mistakenly saved with BPJS indicator IDs under revenue_type = 'umum'
+    if (schemaMode === 'different' && bpjsIndicatorIds.length > 0) {
+      await adminClient
+        .from('t_kpi_assessments')
+        .delete()
+        .in('employee_id', employeeIds)
+        .eq('period', period)
+        .eq('revenue_type', 'umum')
+        .in('indicator_id', bpjsIndicatorIds)
     }
 
     // 6. Fetch BPJS assessments for these employees and period (non-priority indicators)
@@ -355,9 +382,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 8. Prepare UMUM assessment records and mirror records
-    const recordsToInsert: any[] = []
+    const recordsToInsertMap = new Map<string, any>()
     const recordsToUpdate: { id: string; data: any }[] = []
-    const realToInsert: any[] = []
+    const realToInsertMap = new Map<string, any>()
     const realToUpdate: { id: string; data: any }[] = []
 
     let skippedCount = 0
@@ -401,7 +428,7 @@ export async function POST(request: NextRequest) {
       if (existingId) {
         recordsToUpdate.push({ id: existingId, data: umumRecord })
       } else {
-        recordsToInsert.push({ ...umumRecord, created_at: nowIso })
+        recordsToInsertMap.set(key, { ...umumRecord, created_at: nowIso })
       }
 
       // Mirror to t_realization
@@ -420,9 +447,12 @@ export async function POST(request: NextRequest) {
       if (existingRealId) {
         realToUpdate.push({ id: existingRealId, data: realPayload })
       } else {
-        realToInsert.push(realPayload)
+        realToInsertMap.set(key, realPayload)
       }
     }
+
+    const recordsToInsert = Array.from(recordsToInsertMap.values())
+    const realToInsert = Array.from(realToInsertMap.values())
 
     if (recordsToInsert.length === 0 && recordsToUpdate.length === 0) {
       return NextResponse.json({
@@ -435,10 +465,12 @@ export async function POST(request: NextRequest) {
     let errorCount = 0
     const chunkSize = 50
 
-    // Inserts into t_kpi_assessments
+    // Inserts/Upserts into t_kpi_assessments
     for (let i = 0; i < recordsToInsert.length; i += chunkSize) {
       const chunk = recordsToInsert.slice(i, i + chunkSize)
-      const { error: insErr } = await adminClient.from('t_kpi_assessments').insert(chunk)
+      const { error: insErr } = await adminClient
+        .from('t_kpi_assessments')
+        .upsert(chunk, { onConflict: 'employee_id,indicator_id,period,sub_indicator_id,revenue_type' })
       if (insErr) {
         console.error('Copy BPJS->UMUM insert error chunk', Math.floor(i / chunkSize), ':', insErr)
         errorCount += chunk.length

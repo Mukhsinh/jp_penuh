@@ -587,13 +587,7 @@ export async function POST(request: NextRequest) {
         assessor_id: currentEmployee.id
       }
 
-      // Authorization check using in-memory empUnitMap
-      if (currentEmployee.role === 'unit_manager') {
-        const empData = empUnitMap.get(assessmentItem.employee_id)
-        if (!empData || empData.unit_id !== currentEmployee.unit_id) {
-          continue // Skip unauthorized items
-        }
-      }
+
 
       const saved = await upsertAssessment(adminClient, assessmentItem, existingMap)
       results.push(saved)
@@ -707,21 +701,7 @@ export async function PUT(request: NextRequest) {
       assessor_id: currentEmployee.id
     }
 
-    // Authorization check
-    if (currentEmployee.role === 'unit_manager') {
-      const { data: targetEmployee } = await adminClient
-        .from('m_employees')
-        .select('unit_id')
-        .eq('id', assessment.employee_id)
-        .single()
 
-      if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
-        return NextResponse.json(
-          { error: 'You can only assess employees in your unit' },
-          { status: 403 }
-        )
-      }
-    }
 
     const updatedAssessment = await upsertAssessment(adminClient, assessment)
 

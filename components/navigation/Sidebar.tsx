@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
 import { OptimizedLink } from '@/components/ui/optimized-link'
 import { createClient } from '@/lib/supabase/client'
+import { clearAuthStorage } from '@/lib/utils/auth-session'
 import { useSettings } from '@/lib/contexts/settings-context'
 import {
   LayoutDashboard,
@@ -215,6 +216,13 @@ export default function Sidebar() {
 
   const handleLogout = useCallback(async () => {
     try {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('jaspel_last_active_time')
+        try {
+          localStorage.setItem('jaspel_logout_event', Date.now().toString())
+        } catch {}
+        clearAuthStorage(true)
+      }
       const supabase = createClient()
       await supabase.auth.signOut()
       window.location.href = '/login'

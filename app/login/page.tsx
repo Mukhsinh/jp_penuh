@@ -10,6 +10,7 @@ function getErrorMessage(code: string | null): string | null {
   if (!code) return null
   const msgs: Record<string, string> = {
     session_expired: 'Sesi Anda telah berakhir, silakan masuk kembali',
+    idle_timeout: 'Sesi Anda telah berakhir karena tidak ada aktivitas selama lebih dari 30 menit. Silakan masuk kembali.',
     inactive: 'Akun Anda tidak aktif, hubungi administrator',
     user_not_found: 'Data pengguna tidak ditemukan',
     unexpected: 'Terjadi kesalahan, silakan coba lagi',
@@ -29,7 +30,7 @@ function LoginForm() {
 
   useEffect(() => {
     setIsMounted(true)
-    const code = searchParams.get('error')
+    const code = searchParams.get('reason') || searchParams.get('error')
     if (code) setError(getErrorMessage(code))
   }, [searchParams])
 

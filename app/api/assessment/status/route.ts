@@ -195,8 +195,8 @@ export async function GET(request: NextRequest) {
       userRole === 'superadmin' ||
       email === 'admin@sungaipenuh.com'
 
-    // Use admin client for superadmin to bypass RLS, otherwise regular client
-    const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
+    // Use admin client to bypass RLS for consistent employee status calculations
+    const fetchClient = await createAdminClient()
 
     // Get current user's employee record
     let { data: currentEmployee } = await fetchClient
@@ -232,21 +232,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (employeeId) {
-      // Authorization check for unit managers
-      if (effectiveRole === 'unit_manager') {
-        const { data: targetEmployee } = await supabase
-          .from('m_employees')
-          .select('unit_id')
-          .eq('id', employeeId)
-          .single()
 
-        if (!targetEmployee || targetEmployee.unit_id !== effectiveUnitId) {
-          return NextResponse.json(
-            { error: 'You can only view status for employees in your unit' },
-            { status: 403 }
-          )
-        }
-      }
 
       // Get status for specific employee
       const statuses = await getAssessmentStatus(fetchClient, effectiveRole === 'unit_manager' ? effectiveUnitId : null, period, revenueType)
@@ -259,10 +245,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ status: employeeStatus })
     } else {
       // Get status matching unit filter
-      let unitIdFilter = effectiveRole === 'unit_manager' ? effectiveUnitId : null
-
-      if (effectiveRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all') {
-        unitIdFilter = requestedUnitId
+      let unitIdFilter = (requestedUnitId && requestedUnitId !== 'all') ? requestedUnitId : null
+      if (effectiveRole === 'unit_manager' && effectiveUnitId) {
+        unitIdFilter = effectiveUnitId
       }
 
       const statuses = await getAssessmentStatus(fetchClient, unitIdFilter, period, revenueType)

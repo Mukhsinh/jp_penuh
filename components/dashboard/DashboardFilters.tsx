@@ -12,6 +12,7 @@ interface DashboardFiltersProps {
   showPeriodFilter?: boolean
   showExport?: boolean
   units?: Array<{ id: string, name: string }>
+  initialPeriod?: string
 }
 
 export interface FilterState {
@@ -25,7 +26,8 @@ export function DashboardFilters({
   showUnitFilter = false,
   showPeriodFilter = true,
   showExport = true,
-  units = []
+  units = [],
+  initialPeriod
 }: DashboardFiltersProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -33,6 +35,7 @@ export function DashboardFilters({
 
   const currentUnit = searchParams.get('unit_id') || 'all'
   const currentYearVal = searchParams.get('year') || currentYear.toString()
+  const currentPeriod = searchParams.get('period') || initialPeriod || 'M-01'
 
   const handleFilterChange = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -58,7 +61,7 @@ export function DashboardFilters({
               <div className="flex items-center gap-3 w-full">
                 <Calendar className="h-5 w-5 text-gray-400 hidden sm:block" />
                 <select
-                  value={searchParams.get('period') || 'month'}
+                  value={currentPeriod}
                   onChange={(e) => handleFilterChange('period', e.target.value)}
                   className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all hover:border-gray-300"
                 >

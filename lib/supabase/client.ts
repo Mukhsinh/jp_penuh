@@ -12,7 +12,13 @@ export function createClient(forceRefresh = false) {
   }
 
   if (!client || forceRefresh) {
-    client = createBrowserClient(url, key)
+    client = createBrowserClient(url, key, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
+    })
   }
 
   return client

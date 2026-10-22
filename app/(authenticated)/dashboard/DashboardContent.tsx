@@ -85,6 +85,7 @@ export async function DashboardContent({
 
     let units: any[] = []
     let stats
+    let employeeStats: any = null
     let topPerformers: any[] = []
     let worstPerformers: any[] = []
     let unitPerformance: any[] = []
@@ -95,7 +96,7 @@ export async function DashboardContent({
     // Determine which unit ID to use for stats
     const effectiveUnitId = unitManager ? employee.unit_id : unitId
 
-    let employeeStats: any = null
+    const defaultPeriodKey = await DashboardService.getDefaultPeriodKey(supabase)
 
     if (superAdmin || unitManager) {
       try {
@@ -169,6 +170,7 @@ export async function DashboardContent({
                 showPeriodFilter={true}
                 showExport={true}
                 units={units}
+                initialPeriod={defaultPeriodKey}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
@@ -231,6 +233,7 @@ export async function DashboardContent({
                 showUnitFilter={false}
                 showPeriodFilter={true}
                 showExport={true}
+                initialPeriod={defaultPeriodKey}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">

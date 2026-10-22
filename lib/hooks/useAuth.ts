@@ -67,10 +67,10 @@ export function useAuth() {
     try {
       const supabase = createClient()
 
-      // Get session with timeout
+      // Get session with generous timeout to avoid false session dropouts
       const sessionPromise = supabase.auth.getSession()
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Session timeout')), 5000)
+        setTimeout(() => reject(new Error('Session timeout')), 15000)
       )
 
       const { data: { session }, error: sessionError } = await Promise.race([

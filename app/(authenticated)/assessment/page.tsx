@@ -101,10 +101,10 @@ export default async function AssessmentPage() {
       currentEmployee.role = 'superadmin'
     }
 
-    // Fetch initial units on the server for instant availability without client auth race conditions
+    // Fetch units on the server based on role (superadmin sees all, unit manager sees only their unit)
     let initialAvailableUnits: { id: string; name: string }[] = []
     try {
-      const unitsClient = isSuperAdmin ? await createAdminClient() : supabase
+      const unitsClient = await createAdminClient()
       let unitsQuery = unitsClient
         .from('m_units')
         .select('id, name, code')
@@ -116,6 +116,7 @@ export default async function AssessmentPage() {
       }
 
       const { data: unitsData } = await unitsQuery
+
       initialAvailableUnits = (unitsData || [])
         .filter((u: any) => u.code?.toUpperCase() !== 'ADMIN' && u.name?.toUpperCase() !== 'SUPERADMIN')
         .map(({ id, name }: any) => ({ id, name }))

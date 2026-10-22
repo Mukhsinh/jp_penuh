@@ -52,13 +52,21 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8']
 
 export default function AssessmentReports({
   availablePeriods: propAvailablePeriods,
-  selectedPeriod: propSelectedPeriod
+  selectedPeriod: propSelectedPeriod,
+  currentEmployee
 }: {
   availablePeriods: string[],
-  selectedPeriod?: string
+  selectedPeriod?: string,
+  currentEmployee?: {
+    id: string
+    role: string
+    unit_id: string
+    full_name: string
+  }
 }) {
+  const isUnitManager = currentEmployee?.role === 'unit_manager' && currentEmployee.unit_id && currentEmployee.unit_id !== 'all'
   const [selectedPeriod, setSelectedPeriod] = useState<string>(propSelectedPeriod || '')
-  const [selectedUnit, setSelectedUnit] = useState<string>('all')
+  const [selectedUnit, setSelectedUnit] = useState<string>(isUnitManager ? currentEmployee.unit_id : 'all')
   const [reportData, setReportData] = useState<AssessmentReport | null>(null)
   const [periodComparison, setPeriodComparison] = useState<PeriodComparison | null>(null)
   const [periods, setPeriods] = useState<string[]>(propAvailablePeriods || [])
@@ -270,19 +278,25 @@ export default function AssessmentReports({
           </Select>
         </div>
         <div className="flex-1">
-          <Select value={selectedUnit} onValueChange={setSelectedUnit}>
-            <SelectTrigger>
-              <SelectValue placeholder="Pilih unit" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Semua Unit</SelectItem>
-              {availableUnits.map((unit) => (
-                <SelectItem key={unit.id} value={unit.id}>
-                  {unit.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {isUnitManager ? (
+            <div className="h-10 px-3 py-2 bg-slate-100 dark:bg-slate-800 rounded-md border text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center">
+              <span>Unit: <strong>{availableUnits.find(u => u.id === currentEmployee?.unit_id)?.name || 'Unit Anda'}</strong></span>
+            </div>
+          ) : (
+            <Select value={selectedUnit} onValueChange={setSelectedUnit}>
+              <SelectTrigger>
+                <SelectValue placeholder="Pilih unit" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Unit</SelectItem>
+                {availableUnits.map((unit) => (
+                  <SelectItem key={unit.id} value={unit.id}>
+                    {unit.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </div>
 

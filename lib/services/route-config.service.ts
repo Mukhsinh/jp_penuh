@@ -89,6 +89,7 @@ export const legacyRoutes: Record<string, string> = {
   '/admin/reports': '/reports',
   '/admin/audit': '/audit',
   '/admin/settings': '/settings',
+  '/assesment': '/assessment',
 }
 
 /**

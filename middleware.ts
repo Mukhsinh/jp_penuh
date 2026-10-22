@@ -151,14 +151,6 @@ export async function middleware(request: NextRequest) {
           }
         }
       }
-
-      // If user still not authenticated and refresh token is invalid, delete stale auth cookies
-      if (userError && !user && (userError.message?.includes('Refresh Token Not Found') || userError.message?.includes('token is expired'))) {
-        const authCookies = request.cookies.getAll().filter(c => c.name.includes('auth-token') || c.name.includes('access-token'))
-        authCookies.forEach(c => {
-          response.cookies.delete(c.name)
-        })
-      }
     }
 
     const session = user ? { user } : null
@@ -260,13 +252,26 @@ export async function middleware(request: NextRequest) {
         }
 
         if (employeeError || !employee) {
-          console.error('[MIDDLEWARE] User not found in employees and no admin metadata:', session.user.email)
-          if (pathname.startsWith('/api/')) {
-            return NextResponse.json({ error: 'User record not found' }, { status: 404 })
+          const userMeta = session.user.user_metadata || {}
+          const appMeta = session.user.app_metadata || {}
+          const fallbackRole = (appMeta.role || userMeta.role || (session.user as any).role || 'employee') as Role
+
+          if (fallbackRole) {
+            console.warn('[MIDDLEWARE] Database lookup failed or employee record not found, falling back to session metadata role:', fallbackRole)
+            employeeData = {
+              role: fallbackRole,
+              is_active: true
+            }
+            employeeCache.set(session.user.id, employeeData)
+          } else {
+            console.error('[MIDDLEWARE] User not found in employees and no admin metadata:', session.user.email)
+            if (pathname.startsWith('/api/')) {
+              return NextResponse.json({ error: 'User record not found' }, { status: 404 })
+            }
+            const loginUrl = new URL('/login', request.url)
+            loginUrl.searchParams.set('error', 'user_not_found')
+            return NextResponse.redirect(loginUrl)
           }
-          const loginUrl = new URL('/login', request.url)
-          loginUrl.searchParams.set('error', 'user_not_found')
-          return NextResponse.redirect(loginUrl)
         }
 
         employeeData = {

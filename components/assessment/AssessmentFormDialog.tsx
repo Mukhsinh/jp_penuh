@@ -115,12 +115,15 @@ export default function AssessmentFormDialog({
 
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>(revenueType)
   const [kpiSchemaMode, setKpiSchemaMode] = useState<'same' | 'different'>('same')
-  const [applyToUmum, setApplyToUmum] = useState<boolean>(true)
+  const [applyToUmum, setApplyToUmum] = useState<boolean>(false)
 
   // Sync active revenue type when prop changes or dialog opens
   useEffect(() => {
     if (revenueType) {
       setActiveRevenueType(revenueType)
+    }
+    if (open) {
+      setApplyToUmum(false)
     }
   }, [revenueType, open])
 
