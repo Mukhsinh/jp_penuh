@@ -696,7 +696,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     batchedIn(
       supabase,
       't_kpi_assessments',
-      'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+      'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
       'employee_id',
       empIds,
       q => {
@@ -738,7 +738,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       batchedIn(
         supabase,
         't_kpi_assessments',
-        'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+        'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
         'employee_id',
         empIds,
         q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
@@ -856,6 +856,11 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     })
 
     subAssessments = subAssessments.filter((s: any) => {
+      // Guard: Ensure sub_indicator belongs to the indicator (prevents duplicate zombie rows from foreign schemas)
+      if (s.m_kpi_sub_indicators?.indicator_id && s.m_kpi_sub_indicators.indicator_id !== s.indicator_id) {
+        return false
+      }
+
       const info = empUnitMap.get(s.employee_id)
       if (!info) return true
 
@@ -890,6 +895,10 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   // Deduplicate sub-assessments by employee_id + indicator_id + sub_indicator_id
   const uniqueSubMap = new Map<string, any>()
   for (const s of subAssessments) {
+    if (s.m_kpi_sub_indicators?.indicator_id && s.m_kpi_sub_indicators.indicator_id !== s.indicator_id) {
+      continue
+    }
+
     const key = `${s.employee_id}:${s.indicator_id}:${s.sub_indicator_id}`
     const existing = uniqueSubMap.get(key)
     if (!existing) {
