@@ -931,8 +931,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       const tariff = Number(sub.m_kpi_sub_indicators?.base_index_value || 1);
       const realScore = Number(sub.realization_value || 0) * tariff;
 
-      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and Math.abs(tariff) > 1)
-      if (Math.abs(realScore) > 0 && effectiveScore !== realScore && Math.abs(tariff) > 1) {
+      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and tariff has custom value/decimal)
+      if (Math.abs(realScore) > 0 && effectiveScore !== realScore && (Math.abs(tariff) > 1 || (tariff > 0 && Math.abs(tariff - 1) > 0.00001))) {
         effectiveScore = realScore;
       }
 

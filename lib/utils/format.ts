@@ -11,7 +11,7 @@
  * @returns Formatted number string
  */
 export function formatNumber(value: number | string, decimals: number = 0): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+  const num = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value
 
   if (isNaN(num)) {
     return '0'
@@ -30,7 +30,7 @@ export function formatNumber(value: number | string, decimals: number = 0): stri
  * @returns Formatted string
  */
 export function formatDecimal(value: number | string, maxDecimals: number = 4, minDecimals?: number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+  const num = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value
   if (isNaN(num)) return '0'
 
   const min = minDecimals !== undefined ? minDecimals : (num > 0 && num < 100 && num % 1 !== 0 ? 4 : 0)
@@ -48,7 +48,7 @@ export function formatDecimal(value: number | string, maxDecimals: number = 4, m
  * @returns Formatted currency string
  */
 export function formatCurrency(value: number | string, showSymbol: boolean = true, decimals: number = 0): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+  const num = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value
 
   if (isNaN(num)) {
     return showSymbol ? 'Rp 0' : '0'
@@ -165,7 +165,7 @@ export function formatPercentage(
   decimals: number = 2,
   isDecimal: boolean = false
 ): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+  const num = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value
 
   if (isNaN(num)) {
     return '0%'

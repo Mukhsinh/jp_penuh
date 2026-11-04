@@ -285,7 +285,7 @@ const KPITree = memo(function KPITree({
                                 {indicator.measurement_unit && (
                                   <span>Satuan: {indicator.measurement_unit}</span>
                                 )}
-                                {indicator.base_index_value !== undefined && indicator.base_index_value !== null && Number(indicator.base_index_value) > 0 && (
+                                {indicatorSubs.length === 0 && (indicator.calculation_method === 'priority' || indicator.measurement_type === 'quantitative' || category.configuration_style === 'activity') && indicator.base_index_value !== undefined && indicator.base_index_value !== null && Number(indicator.base_index_value) > 0 && (
                                   <span className="font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 text-xs">
                                     Tarif Dasar / Indeks: {Number(indicator.base_index_value) >= 1000 ? formatCurrency(indicator.base_index_value) : formatDecimal(indicator.base_index_value, 4)}
                                   </span>

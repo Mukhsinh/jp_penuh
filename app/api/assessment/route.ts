@@ -200,8 +200,20 @@ async function upsertAssessment(
   // 3. Handle Sub-Assessments concurrently in parallel
   if (hasSubs) {
     const subPromises = assessment.sub_assessments.map(async (sub: any) => {
-      const subScore = sub.score || 0
-      const subRealization = sub.realization_value || 0
+      let subScore = Number(sub.score) || 0
+      const subRealization = Number(sub.realization_value) || 0
+
+      // Auto-compute score for quantitative sub-indicators if score was not passed or 0
+      if (subRealization > 0 && subScore === 0 && sub.sub_indicator_id) {
+        const { data: subConfig } = await adminClient
+          .from('m_kpi_sub_indicators')
+          .select('measurement_type, base_index_value')
+          .eq('id', sub.sub_indicator_id)
+          .maybeSingle()
+        if (subConfig?.measurement_type === 'quantitative') {
+          subScore = Number((subRealization * Number(subConfig.base_index_value || 0)).toFixed(4))
+        }
+      }
 
       let subExistingId = sub.id
       const subKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:${sub.sub_indicator_id}`

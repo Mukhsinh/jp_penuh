@@ -211,7 +211,7 @@ export default function AssessmentFormDialog({
               s => s.sub_indicator_id === item.sub_indicator_id
             )
             const subRealiz = Number(item.realization_value) || 0
-            const subSc = Number(item.score) || subRealiz
+            const subSc = Number(item.score || 0)
             if (existingSubIndex >= 0) {
               assessmentMap[indicatorId].sub_assessments[existingSubIndex] = {
                 id: item.id,
@@ -439,14 +439,18 @@ export default function AssessmentFormDialog({
           const fullSubAssessments = (indicator.sub_indicators || []).map(subConfig => {
             const existing = assessment.sub_assessments.find(s => s.sub_indicator_id === subConfig.id)
             const fallbackVal = (!existing && indicator.sub_indicators.length === 1 && assessment.realization_value !== undefined) ? assessment.realization_value : 0
-            const fallbackScore = (!existing && indicator.sub_indicators.length === 1 && (assessment.score || assessment.realization_value)) ? (assessment.score || assessment.realization_value) : 0
+            const realVal = existing?.realization_value ?? fallbackVal
+            const isQuant = subConfig.measurement_type === 'quantitative'
+            const calculatedScore = isQuant
+              ? Number((realVal * (Number(subConfig.base_index_value) || 0)).toFixed(4))
+              : (existing?.score ?? (indicator.sub_indicators.length === 1 && (assessment.score || assessment.realization_value) ? (assessment.score || assessment.realization_value) : 0))
             return {
               id: existing?.id,
               sub_indicator_id: subConfig.id,
               code: subConfig.code,
               name: subConfig.name,
-              realization_value: existing?.realization_value ?? fallbackVal,
-              score: existing?.score ?? fallbackScore
+              realization_value: realVal,
+              score: calculatedScore
             }
           })
 
@@ -1073,12 +1077,13 @@ export default function AssessmentFormDialog({
                                   const subRealization = subAssessment?.realization_value
                                     ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.realization_value) ? assessment.realization_value : 0)
                                   const isQuantitative = sub.measurement_type === 'quantitative'
-                                  let subScore = subAssessment?.score ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.score) ? assessment.score : 0)
-
-                                  if (subAssessment && !subAssessment.score && subRealization > 0) {
-                                    if (isQuantitative) {
-                                      subScore = subRealization * (sub.base_index_value || 1)
-                                    } else {
+                                  let subScore = 0
+                                  if (isQuantitative) {
+                                    const tariff = Number(sub.base_index_value) || 0
+                                    subScore = Number((subRealization * tariff).toFixed(4))
+                                  } else {
+                                    subScore = subAssessment?.score ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.score) ? assessment.score : 0)
+                                    if (subAssessment && !subAssessment.score && subRealization > 0) {
                                       subScore = subRealization
                                     }
                                   }
@@ -1105,7 +1110,7 @@ export default function AssessmentFormDialog({
                                               : "bg-white text-gray-500 border-gray-200"
                                           )}
                                         >
-                                          {isQuantitative ? `Volume: ${subRealization}` : `Skor: ${subScore.toFixed(2)}`}
+                                          {isQuantitative ? `Volume: ${formatDecimal(subRealization, 4)} • Skor: ${formatDecimal(subScore, 4)}` : `Skor: ${subScore.toFixed(2)}`}
                                         </Badge>
                                       </div>
 
@@ -1184,8 +1189,8 @@ export default function AssessmentFormDialog({
                                               </div>
                                               <div className="w-1/3">
                                                 <Label className="text-[10px] text-gray-500 mb-1 block">Hasil Skor/Nilai</Label>
-                                                <div className="h-8 text-xs bg-gray-100 border rounded flex items-center px-2 font-medium">
-                                                  {subScore.toLocaleString('id-ID')}
+                                                <div className="h-8 text-xs bg-gray-100 border rounded flex items-center px-2 font-medium font-semibold text-blue-900">
+                                                  {formatDecimal(subScore, 4)}
                                                 </div>
                                               </div>
                                             </div>

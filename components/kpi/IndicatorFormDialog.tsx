@@ -268,7 +268,8 @@ export default function IndicatorFormDialog({
           })
         }
       } else if (formData.measurement_type === 'quantitative') {
-        if (!formData.base_index_value || parseFloat(formData.base_index_value.toString()) <= 0) {
+        const rawBaseSub = formData.base_index_value ? formData.base_index_value.toString().replace(',', '.').trim() : ''
+        if (!rawBaseSub || parseFloat(rawBaseSub) <= 0) {
           newErrors.base_index_value_sub = 'Tarif Dasar / Nilai Indeks harus lebih besar dari 0'
         }
         if (isMedicalUnit && formData.service_types.length === 0) {
@@ -298,12 +299,14 @@ export default function IndicatorFormDialog({
         weight_percentage: (category?.is_weighted === false || formData.calculation_method === 'priority') ? 0 : parseFloat(formData.weight_percentage),
         measurement_unit: null,
         description: formData.description.trim() || null,
-        base_index_value: (formData.calculation_method === 'priority' || category?.configuration_style === 'activity' || (!category && (indicator as any)?.m_kpi_categories?.configuration_style === 'activity'))
-          ? parseFloat(formData.indicator_base_value || '0')
-          : (formData.base_index_value ? parseFloat(formData.base_index_value) : 0),
+        base_index_value: hasSubIndicators
+          ? 0
+          : (formData.calculation_method === 'priority' || category?.configuration_style === 'activity' || (!category && (indicator as any)?.m_kpi_categories?.configuration_style === 'activity'))
+            ? parseFloat((formData.indicator_base_value || '0').toString().replace(',', '.').trim())
+            : (formData.measurement_type === 'quantitative' && formData.base_index_value ? parseFloat(formData.base_index_value.toString().replace(',', '.').trim()) : 0),
         calculation_method: formData.calculation_method,
         measurement_type: formData.measurement_type,
-        unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff) : 0,
+        unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff.toString().replace(',', '.').trim()) : 0,
         service_types: formData.service_types
       }
 
@@ -327,8 +330,8 @@ export default function IndicatorFormDialog({
           measurement_unit: formData.measurement_type === 'quantitative' ? formData.measurement_unit : null,
           scoring_criteria: formData.scoring_criteria,
           measurement_type: formData.measurement_type,
-          unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff) : 0,
-          base_index_value: formData.base_index_value ? parseFloat(formData.base_index_value) : 0,
+          unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff.toString().replace(',', '.').trim()) : 0,
+          base_index_value: formData.base_index_value ? parseFloat(formData.base_index_value.toString().replace(',', '.').trim()) : 0,
           service_types: formData.service_types
         }
 
@@ -511,16 +514,16 @@ export default function IndicatorFormDialog({
                         <Label htmlFor="base_index_value_sub">Tarif Dasar / Nilai Indeks *</Label>
                         <Input
                           id="base_index_value_sub"
-                          type="number"
-                          step="0.0001"
+                          type="text"
+                          inputMode="decimal"
                           value={formData.base_index_value}
                           onChange={(e) => setFormData({ ...formData, base_index_value: e.target.value })}
-                          placeholder="contoh: 150000 atau 0.8250"
+                          placeholder="contoh: 150000 atau 0.0025 atau 0,0025"
                         />
                         {errors.base_index_value_sub && (
                           <p className="text-sm text-red-600">{errors.base_index_value_sub}</p>
                         )}
-                        <p className="text-xs text-gray-500">Nilai tarif/indeks ini akan dikalikan dengan volume capaian (mendukung hingga 4 digit desimal).</p>
+                        <p className="text-xs text-gray-500">Nilai tarif/indeks ini akan dikalikan dengan volume capaian (dapat diisi bilangan bulat maupun desimal hingga 4 digit di belakang koma/titik, contoh: 0.0025 atau 0,0025).</p>
                       </div>
 
                       <div className="space-y-2">

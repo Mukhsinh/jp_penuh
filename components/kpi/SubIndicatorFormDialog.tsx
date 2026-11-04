@@ -226,7 +226,8 @@ export default function SubIndicatorFormDialog({
                 }
             }
         } else if (formData.measurement_type === 'quantitative') {
-            const baseVal = parseFloat(formData.base_index_value || '0')
+            const rawVal = formData.base_index_value ? formData.base_index_value.toString().replace(',', '.').trim() : '0'
+            const baseVal = parseFloat(rawVal)
             if (baseVal <= 0) {
                 newErrors.base_index_value = 'Tarif Dasar / Nilai Indeks harus lebih besar dari 0'
             }
@@ -257,8 +258,8 @@ export default function SubIndicatorFormDialog({
                 measurement_unit: formData.measurement_unit.trim() || undefined,
                 scoring_criteria: formData.scoring_criteria,
                 measurement_type: formData.measurement_type,
-                unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff) : undefined,
-                base_index_value: formData.base_index_value ? parseFloat(formData.base_index_value) : undefined,
+                unit_tariff: formData.unit_tariff ? parseFloat(formData.unit_tariff.toString().replace(',', '.').trim()) : undefined,
+                base_index_value: formData.base_index_value ? parseFloat(formData.base_index_value.toString().replace(',', '.').trim()) : undefined,
                 service_types: formData.service_types
             }
 
@@ -390,15 +391,15 @@ export default function SubIndicatorFormDialog({
                                             <Label htmlFor="base_index_value">Tarif Dasar / Nilai Indeks *</Label>
                                             <Input
                                                 id="base_index_value"
-                                                type="number"
-                                                step="0.0001"
+                                                type="text"
+                                                inputMode="decimal"
                                                 value={formData.base_index_value}
                                                 onChange={(e) => setFormData({ ...formData, base_index_value: e.target.value })}
-                                                placeholder="contoh: 150000 atau 0.8250"
+                                                placeholder="contoh: 150000 atau 0.0025 atau 0,0025"
                                                 className={errors.base_index_value ? 'border-red-500' : ''}
                                             />
                                             {errors.base_index_value && <p className="text-xs text-red-500">{errors.base_index_value}</p>}
-                                            <p className="text-xs text-gray-500">Nilai tarif/indeks ini akan dikalikan dengan volume capaian (mendukung hingga 4 digit desimal di belakang koma).</p>
+                                            <p className="text-xs text-gray-500">Nilai tarif/indeks ini akan dikalikan dengan volume capaian (dapat diisi bilangan bulat maupun desimal hingga 4 digit di belakang koma/titik, contoh: 0.0025 atau 0,0025).</p>
                                         </div>
 
                                         {isMedicalUnit && (

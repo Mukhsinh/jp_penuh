@@ -25,6 +25,29 @@ export async function POST() {
       ADD COLUMN IF NOT EXISTS measurement_type VARCHAR(50) DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS unit_tariff NUMERIC DEFAULT 0,
       ADD COLUMN IF NOT EXISTS service_types TEXT[] DEFAULT '{}'::text[];
+
+      -- 4. Alter columns to NUMERIC(15,4) to support 4 decimal places
+      ALTER TABLE m_kpi_indicators 
+      ALTER COLUMN base_index_value TYPE NUMERIC(15,4),
+      ALTER COLUMN unit_tariff TYPE NUMERIC(15,4),
+      ALTER COLUMN target_value TYPE NUMERIC(15,4);
+
+      ALTER TABLE m_kpi_sub_indicators 
+      ALTER COLUMN base_index_value TYPE NUMERIC(15,4),
+      ALTER COLUMN unit_tariff TYPE NUMERIC(15,4),
+      ALTER COLUMN target_value TYPE NUMERIC(15,4);
+
+      DO $$
+      BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 't_kpi_assessments') THEN
+              ALTER TABLE t_kpi_assessments 
+                  ALTER COLUMN realization_value TYPE NUMERIC(15,4),
+                  ALTER COLUMN score TYPE NUMERIC(15,4),
+                  ALTER COLUMN target_value TYPE NUMERIC(15,4);
+          END IF;
+      END $$;
+
+      NOTIFY pgrst, 'reload schema';
     `
 
         // Use Supabase Management API to run SQL
