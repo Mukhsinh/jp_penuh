@@ -945,8 +945,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       const weight = Number(sub.m_kpi_sub_indicators?.weight_percentage || 0)
 
       const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
-      const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority' ||
-        mainAsses?.m_kpi_indicators?.m_kpi_categories?.configuration_style === 'activity'
+      const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
 
       if (isPriority) {
         const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
@@ -1055,8 +1054,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
           : (parseFloat(a.target_value) || 0)
         const calcMethod = a.m_kpi_indicators?.calculation_method || 'indexing'
 
-        const isPriority = calcMethod === 'priority' || firstCatObj?.configuration_style === 'activity'
-        const isActivity = isPriority
+        const isPriority = calcMethod === 'priority'
+        const isActivity = isPriority || firstCatObj?.configuration_style === 'activity'
 
         // Resolve effectiveScore: prefer sub-assessment aggregate, else if activity use volume*tariff, else fallback
         let effectiveScore: number
