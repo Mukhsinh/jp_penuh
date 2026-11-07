@@ -135,6 +135,8 @@ export async function GET(request: NextRequest) {
               full_name,
               unit_id,
               role,
+              is_contract,
+              contract_percentage,
               m_units!inner (
                 name,
                 code
@@ -150,6 +152,8 @@ export async function GET(request: NextRequest) {
               full_name,
               unit_id,
               role,
+              is_contract,
+              contract_percentage,
               m_units!inner (
                 name,
                 code
@@ -219,12 +223,20 @@ export async function GET(request: NextRequest) {
       const existingAssessments = await fetchAllRows(
         adminClient,
         't_kpi_assessments',
-        'employee_id, indicator_id',
+        'employee_id, indicator_id, is_contract, contract_percentage',
         (q: any) => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
       )
 
       const assessedCountMap: Record<string, Set<string>> = {}
+      const contractStatusMap = new Map<string, { is_contract: boolean; contract_percentage: number }>()
+
       existingAssessments?.forEach((ass: any) => {
+        if (ass.is_contract !== null && ass.is_contract !== undefined) {
+          contractStatusMap.set(ass.employee_id, {
+            is_contract: Boolean(ass.is_contract),
+            contract_percentage: Number(ass.contract_percentage || 100)
+          })
+        }
         if (validIndicatorIds.has(ass.indicator_id)) {
           if (!assessedCountMap[ass.employee_id]) {
             assessedCountMap[ass.employee_id] = new Set()
@@ -271,6 +283,10 @@ export async function GET(request: NextRequest) {
         }
         const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
 
+        const cStatus = contractStatusMap.get(emp.id)
+        const isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
+        const contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+
         return {
           employee_id: emp.id,
           full_name: emp.full_name,
@@ -281,6 +297,8 @@ export async function GET(request: NextRequest) {
           assessed_indicators: assessedInd,
           status: empStatus,
           completion_percentage: completionPct,
+          is_contract: isContract,
+          contract_percentage: contractPercentage,
           role: emp.role
         }
       })

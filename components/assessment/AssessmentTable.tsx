@@ -150,8 +150,13 @@ export default function AssessmentTable({
                       {employee.full_name.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <div className="font-medium text-gray-900">
-                        {employee.full_name}
+                      <div className="font-medium text-gray-900 flex items-center gap-2">
+                        <span>{employee.full_name}</span>
+                        {employee.is_contract && (
+                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] py-0 px-1.5 font-normal">
+                            Kontrak ({employee.contract_percentage || 80}%)
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>

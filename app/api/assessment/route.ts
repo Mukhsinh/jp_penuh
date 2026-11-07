@@ -17,6 +17,8 @@ interface Assessment {
   sub_assessments?: any
   assessor_id: string
   revenue_type?: string
+  is_contract?: boolean
+  contract_percentage?: number
   created_at?: string
   updated_at?: string
 }
@@ -160,6 +162,8 @@ async function upsertAssessment(
       : (hasSubs ? aggregateScore : (assessment.score ?? effectiveRealization)),
     assessor_id: assessment.assessor_id,
     revenue_type: revType,
+    is_contract: assessment.is_contract ?? false,
+    contract_percentage: assessment.contract_percentage !== undefined && assessment.contract_percentage !== null ? Number(assessment.contract_percentage) : 100,
     updated_at: new Date().toISOString()
   }
 
@@ -249,6 +253,8 @@ async function upsertAssessment(
         notes: sub.notes || '',
         assessor_id: assessment.assessor_id,
         revenue_type: revType,
+        is_contract: assessment.is_contract ?? false,
+        contract_percentage: assessment.contract_percentage !== undefined && assessment.contract_percentage !== null ? Number(assessment.contract_percentage) : 100,
         updated_at: new Date().toISOString()
       }
 
@@ -417,7 +423,24 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to fetch assessments: ${fetchErr.message}`)
     }
 
-    return NextResponse.json({ assessments: assessments || [] }, {
+    // Get employee contract status if available
+    const { data: empRecord } = await adminClient
+      .from('m_employees')
+      .select('is_contract, contract_percentage')
+      .eq('id', employeeId)
+      .maybeSingle()
+
+    const contractAssessment = assessments?.find((a: any) => a.is_contract !== null && a.is_contract !== undefined)
+    const isContract = contractAssessment ? Boolean(contractAssessment.is_contract) : Boolean(empRecord?.is_contract)
+    const contractPercentage = contractAssessment && contractAssessment.contract_percentage !== null && contractAssessment.contract_percentage !== undefined
+      ? Number(contractAssessment.contract_percentage)
+      : (empRecord?.contract_percentage !== null && empRecord?.contract_percentage !== undefined ? Number(empRecord.contract_percentage) : 100)
+
+    return NextResponse.json({
+      assessments: assessments || [],
+      is_contract: isContract,
+      contract_percentage: contractPercentage
+    }, {
       headers: {
         'Cache-Control': 'no-store, no-cache, max-age=0, must-revalidate'
       }
@@ -596,6 +619,8 @@ export async function POST(request: NextRequest) {
     for (const item of itemsToProcess) {
       const assessmentItem: Assessment = {
         ...item,
+        is_contract: item.is_contract !== undefined ? item.is_contract : (rawBody.is_contract !== undefined ? rawBody.is_contract : undefined),
+        contract_percentage: item.contract_percentage !== undefined ? item.contract_percentage : (rawBody.contract_percentage !== undefined ? rawBody.contract_percentage : undefined),
         assessor_id: currentEmployee.id
       }
 
@@ -649,6 +674,35 @@ export async function POST(request: NextRequest) {
           }
           const savedUmum = await upsertAssessment(adminClient, copyItem, existingMap)
           results.push(savedUmum)
+        }
+      }
+    }
+
+    // Update employee contract status if specified in assessment payload
+    for (const empId of uniqueEmpIds) {
+      const itemWithContract = itemsToProcess.find((i: any) => i.employee_id === empId && i.is_contract !== undefined) || (rawBody.employee_id === empId ? rawBody : null)
+      if (itemWithContract && itemWithContract.is_contract !== undefined) {
+        try {
+          // Sync across all assessment records for this employee & period
+          await adminClient
+            .from('t_kpi_assessments')
+            .update({
+              is_contract: Boolean(itemWithContract.is_contract),
+              contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
+            })
+            .eq('employee_id', empId)
+            .eq('period', samplePeriod)
+
+          // Also sync to employee master
+          await adminClient
+            .from('m_employees')
+            .update({
+              is_contract: Boolean(itemWithContract.is_contract),
+              contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
+            })
+            .eq('id', empId)
+        } catch (cErr) {
+          console.warn('Failed to sync contract status:', cErr)
         }
       }
     }

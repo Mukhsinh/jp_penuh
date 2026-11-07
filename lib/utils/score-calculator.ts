@@ -17,12 +17,14 @@ export function calculateTotalScore(
     p1: number,
     p2: number,
     p3: number,
-    isMedical: boolean
+    isMedical: boolean,
+    contractPercentage?: number
 ): number {
-    if (isMedical) {
-        return p1 + p2 + p3
+    const raw = isMedical ? (p1 + p2 + p3) : (p1 + p2 + p3) / 3
+    if (isMedical && contractPercentage !== undefined && contractPercentage !== null && contractPercentage !== 100) {
+        return raw * (Math.max(0, contractPercentage) / 100)
     }
-    return (p1 + p2 + p3) / 3
+    return raw
 }
 
 /**

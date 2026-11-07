@@ -714,6 +714,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     created_at,
     updated_at,
     target_value,
+    is_contract,
+    contract_percentage,
     m_kpi_indicators (
       id,
       name,
@@ -760,7 +762,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     batchedIn(
       supabase,
       't_kpi_assessments',
-      'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
+      'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, is_contract, contract_percentage, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
       'employee_id',
       empIds,
       q => {
@@ -802,7 +804,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       batchedIn(
         supabase,
         't_kpi_assessments',
-        'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
+        'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, is_contract, contract_percentage, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
         'employee_id',
         empIds,
         q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
@@ -1218,21 +1220,54 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       return { indexScore, priorityScore }
     }
 
+    // Check contract status for Medis unit
+    let isContract = false
+    let contractPercentage = 100
+
+    if (isMedicalUnit) {
+      const assContract = rawEmpAssessments.find((a: any) => a.is_contract === true) || rawEmpAssessments.find((a: any) => a.is_contract !== null && a.is_contract !== undefined)
+      if (assContract) {
+        isContract = Boolean(assContract.is_contract)
+        if (assContract.contract_percentage !== null && assContract.contract_percentage !== undefined) {
+          contractPercentage = Number(assContract.contract_percentage)
+        }
+      } else {
+        const empRec = allEmployees.find((e: any) => e.id === empId)
+        if (empRec) {
+          isContract = Boolean(empRec.is_contract)
+          if (empRec.contract_percentage !== null && empRec.contract_percentage !== undefined) {
+            contractPercentage = Number(empRec.contract_percentage)
+          }
+        }
+      }
+    }
+
+    const contractMultiplier = (isMedicalUnit && isContract) ? (Math.max(0, contractPercentage) / 100) : 1
+
     const p1Res = calcCategoryScore('P1')
     const p2Res = calcCategoryScore('P2')
     const p3Res = calcCategoryScore('P3')
 
     const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
 
-    const p1 = round2(p1Res.indexScore)
-    const p2 = round2(p2Res.indexScore)
-    const p3 = round2(p3Res.indexScore)
+    const p1 = round2(p1Res.indexScore * contractMultiplier)
+    const p2 = round2(p2Res.indexScore * contractMultiplier)
+    const p3 = round2(p3Res.indexScore * contractMultiplier)
 
     const p1_priority = round2(p1Res.priorityScore)
     const p2_priority = round2(p2Res.priorityScore)
     const p3_priority = round2(p3Res.priorityScore)
 
     const total_priority_score = round2(p1_priority + p2_priority + p3_priority)
+
+    // Also adjust assessmentDetails scores for indexing indicators if contractMultiplier !== 1
+    if (isMedicalUnit && isContract && contractMultiplier !== 1) {
+      for (const d of assessmentDetails) {
+        if (!d.is_priority && !d.is_activity) {
+          d.score = round2(d.score * contractMultiplier)
+        }
+      }
+    }
 
     // Catch-all for assessments in other categories to ensure they are added to assessmentDetails
     const remainingAssessments = empAssessments.filter((a: any) => {
@@ -1243,13 +1278,15 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     for (const a of remainingAssessments) {
       const indName = a.m_kpi_indicators?.name || '-'
       const catName = a.m_kpi_indicators?.m_kpi_categories?.category || 'Lainnya'
+      const baseScore = parseFloat(a.score) || 0
+      const adjScore = (isMedicalUnit && isContract && contractMultiplier !== 1) ? round2(baseScore * contractMultiplier) : baseScore
       assessmentDetails.push({
         name: indName,
         category: catName,
         weight: parseFloat(a.m_kpi_indicators?.weight_percentage ?? a.weight_percentage) || 0,
         target: parseFloat(a.m_kpi_indicators?.target_value ?? a.target_value) || 100,
         realization: parseFloat(a.realization_value) || 0,
-        score: parseFloat(a.score) || 0,
+        score: adjScore,
         is_weighted: false,
         is_activity: false,
         activity_value: 0
@@ -1263,12 +1300,29 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       totalScore: Number((p1 + p2 + p3).toFixed(2)),
       totalActivityRupiah: Number(totalActivityRupiah),
       totalDeductionRupiah: Number(totalDeductionRupiah),
-      assessmentDetails
+      assessmentDetails,
+      is_contract: isContract,
+      contract_percentage: contractPercentage
     }
   }
 
   // --- First pass: calculate ALL employee scores and unit totals ---
-  const employeeScoresMap = new Map<string, { emp: any; p1: number; p2: number; p3: number; p1_priority: number; p2_priority: number; p3_priority: number; total_priority_score: number; totalScore: number; totalActivityRupiah: number; totalDeductionRupiah: number; assessmentDetails: any[] }>()
+  const employeeScoresMap = new Map<string, {
+    emp: any;
+    p1: number;
+    p2: number;
+    p3: number;
+    p1_priority: number;
+    p2_priority: number;
+    p3_priority: number;
+    total_priority_score: number;
+    totalScore: number;
+    totalActivityRupiah: number;
+    totalDeductionRupiah: number;
+    assessmentDetails: any[];
+    is_contract?: boolean;
+    contract_percentage?: number;
+  }>()
   const unitTotalScoresMap = new Map<string, number>()
   const unitTotalActivityMap = new Map<string, number>()
   const unitEmployeeCountMap = new Map<string, number>()
@@ -1497,7 +1551,11 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       bank_account_number: mappedBankAccount,
       bank_account_holder: mappedBankHolder,
       tax_status: emp.tax_status || 'TK/0',
-      employee_status: emp.employment_status || ((emp.employee_status === 'active' || emp.employee_status === 'ASN') ? 'ASN' : (emp.employee_status || 'BLUD')),
+      employee_status: (isMedical && data.is_contract)
+        ? `Kontrak (${data.contract_percentage}%)`
+        : (emp.employment_status || ((emp.employee_status === 'active' || emp.employee_status === 'ASN') ? 'ASN' : (emp.employee_status || 'BLUD'))),
+      is_contract: Boolean(data.is_contract),
+      contract_percentage: data.contract_percentage !== undefined ? data.contract_percentage : 100,
       tax_type: (emp.tax_type === 'gross' || emp.tax_type === 'Final') ? 'Final' : (emp.tax_type || 'TER'),
       pns_grade: (emp.pns_grade && emp.pns_grade !== 'null') ? emp.pns_grade : '-',
       tax_mechanism_used: taxMechanism,

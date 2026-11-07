@@ -380,6 +380,8 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
       employeeScores.set(employeeId, {
         employee_name: assessment.m_employees?.full_name || 'N/A',
         unit_name: assessment.m_employees?.m_units?.name || 'N/A',
+        is_contract: assessment.is_contract,
+        contract_percentage: assessment.contract_percentage,
         scores: [],
         p1_scores: [],
         p2_scores: [],
@@ -415,10 +417,12 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const topPerformers = Array.from(employeeScores.entries())
     .map(([employeeId, data]: [string, any]) => {
       const isMedical = isMedicalUnit(null, data.unit_name);
+      const isContract = Boolean(data.is_contract);
+      const contractMultiplier = (isMedical && isContract) ? (Math.max(0, Number(data.contract_percentage) || 100) / 100) : 1;
 
-      const p1 = round2(calculateCategoryScore(data.p1_scores, isMedical));
-      const p2 = round2(calculateCategoryScore(data.p2_scores, isMedical));
-      const p3 = round2(calculateCategoryScore(data.p3_scores, isMedical));
+      const p1 = round2(calculateCategoryScore(data.p1_scores, isMedical) * contractMultiplier);
+      const p2 = round2(calculateCategoryScore(data.p2_scores, isMedical) * contractMultiplier);
+      const p3 = round2(calculateCategoryScore(data.p3_scores, isMedical) * contractMultiplier);
 
       const total_score = round2(calculateTotalScore(p1, p2, p3, isMedical));
 
@@ -478,18 +482,18 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   return NextResponse.json({ success: true, report })
 }
 
-async function getPeriodComparison(supabase: any, currentEmp: any, currentPeriod: string, unitId?: string | null) {
+async function getPeriodComparison(supabase: any, currentEmp: any, currentPeriod: string, unitId?: string | null, revenueType: string = 'bpjs') {
   // Get previous period (assuming YYYY-MM format)
   const [year, month] = currentPeriod.split('-').map(Number)
   const prevDate = new Date(year, month - 2, 1) // month - 2 because Date month is 0-indexed
   const previousPeriod = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`
 
   // Get current period data
-  const currentResponse = await getAssessmentReport(supabase, currentEmp, currentPeriod, unitId)
+  const currentResponse = await getAssessmentReport(supabase, currentEmp, currentPeriod, unitId, revenueType)
   const currentData = await currentResponse.json()
 
   // Get previous period data
-  const previousResponse = await getAssessmentReport(supabase, currentEmp, previousPeriod, unitId)
+  const previousResponse = await getAssessmentReport(supabase, currentEmp, previousPeriod, unitId, revenueType)
   const previousData = await previousResponse.json()
 
   if (!currentData.success || !previousData.success) {

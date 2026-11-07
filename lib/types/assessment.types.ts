@@ -12,6 +12,8 @@ export interface Assessment {
   notes?: string
   assessor_id: string
   revenue_type?: string | null
+  is_contract?: boolean
+  contract_percentage?: number
   created_at?: string
   updated_at?: string
 }
@@ -26,6 +28,9 @@ export interface AssessmentStatus {
   assessed_indicators: number
   status: string
   completion_percentage: number
+  is_contract?: boolean
+  contract_percentage?: number
+  role?: string
 }
 
 export interface AssessmentIndicator {

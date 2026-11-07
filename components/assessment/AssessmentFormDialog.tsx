@@ -117,6 +117,12 @@ export default function AssessmentFormDialog({
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>(revenueType)
   const [kpiSchemaMode, setKpiSchemaMode] = useState<'same' | 'different'>('same')
   const [applyToUmum, setApplyToUmum] = useState<boolean>(false)
+  const [isContract, setIsContract] = useState<boolean>(Boolean(employee?.is_contract))
+  const [contractPercentage, setContractPercentage] = useState<number>(
+    employee?.contract_percentage !== undefined && employee?.contract_percentage !== null
+      ? Number(employee.contract_percentage)
+      : 80
+  )
 
   // Sync active revenue type when prop changes or dialog opens
   useEffect(() => {
@@ -125,8 +131,14 @@ export default function AssessmentFormDialog({
     }
     if (open) {
       setApplyToUmum(false)
+      setIsContract(Boolean(employee?.is_contract))
+      setContractPercentage(
+        employee?.contract_percentage !== undefined && employee?.contract_percentage !== null
+          ? Number(employee.contract_percentage)
+          : 80
+      )
     }
-  }, [revenueType, open])
+  }, [revenueType, open, employee])
 
   // Fetch unit's KPI schema mode on mount/open
   useEffect(() => {
@@ -191,6 +203,29 @@ export default function AssessmentFormDialog({
       if (assessmentsResponse.ok) {
         const data = await assessmentsResponse.json()
         const assessmentMap: Record<string, AssessmentData> = {}
+
+        // Load contract status if employee is in MEDIS unit
+        if (isMedicalUnit) {
+          if (data.is_contract !== undefined && data.is_contract !== null) {
+            setIsContract(Boolean(data.is_contract))
+            if (data.contract_percentage !== null && data.contract_percentage !== undefined) {
+              setContractPercentage(Number(data.contract_percentage))
+            }
+          } else {
+            const contractItem = data.assessments?.find((item: any) => item.is_contract !== null && item.is_contract !== undefined)
+            if (contractItem) {
+              setIsContract(Boolean(contractItem.is_contract))
+              if (contractItem.contract_percentage !== null && contractItem.contract_percentage !== undefined) {
+                setContractPercentage(Number(contractItem.contract_percentage))
+              }
+            } else if (employee?.is_contract !== undefined) {
+              setIsContract(Boolean(employee.is_contract))
+              if (employee.contract_percentage !== null && employee.contract_percentage !== undefined) {
+                setContractPercentage(Number(employee.contract_percentage))
+              }
+            }
+          }
+        }
 
         data.assessments?.forEach((item: any) => {
           const indicatorId = item.indicator_id
@@ -482,7 +517,9 @@ export default function AssessmentFormDialog({
             notes: assessment.notes,
             score: assessment.score,
             revenue_type: activeRevenueType,
-            sub_assessments: fullSubAssessments
+            sub_assessments: fullSubAssessments,
+            is_contract: isMedicalUnit ? isContract : false,
+            contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100
           }
         })
       )
@@ -494,7 +531,10 @@ export default function AssessmentFormDialog({
         },
         body: JSON.stringify({
           assessments: batchData,
-          apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false
+          apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
+          is_contract: isMedicalUnit ? isContract : false,
+          contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
+          employee_id: employee.employee_id
         })
       })
 
@@ -623,6 +663,8 @@ export default function AssessmentFormDialog({
                 score: assessment.score,
                 sub_assessments: fullSubAssessments,
                 revenue_type: activeRevenueType,
+                is_contract: isMedicalUnit ? isContract : false,
+                contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
                 assessor_id: '' // API will handle this from session
               }
             })
@@ -633,7 +675,10 @@ export default function AssessmentFormDialog({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               assessments: batchData,
-              apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false
+              apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
+              is_contract: isMedicalUnit ? isContract : false,
+              contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
+              employee_id: employee.employee_id
             })
           })
 
@@ -858,7 +903,9 @@ export default function AssessmentFormDialog({
               }
             }
 
-            const poinAkhir = round2(isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir);
+            const rawPoinAkhir = round2(isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir);
+            const contractMultiplier = (isMedicalUnit && isContract) ? (Math.max(0, Number(contractPercentage) || 0) / 100) : 1;
+            const poinAkhir = round2(rawPoinAkhir * (isMedicalUnit && isContract ? contractMultiplier : 1));
             totalSkorIndeks += poinAkhir;
 
             return (
@@ -876,7 +923,9 @@ export default function AssessmentFormDialog({
                     {formatDecimal(poinAkhir, 2)}
                   </div>
                   <div className="text-[10px] text-gray-400">
-                    {totalTargetKategori > 0
+                    {isMedicalUnit && isContract ? (
+                      <span className="text-amber-700 font-medium">Asli: {formatDecimal(rawPoinAkhir, 2)} (x {contractPercentage}%)</span>
+                    ) : totalTargetKategori > 0
                       ? `${formatDecimal(totalRealisasiKategori, 2)} / ${formatDecimal(totalTargetKategori, 2)}`
                       : `${formatDecimal(totalRealisasiKategori, 2)} Poin`}
                   </div>
@@ -921,6 +970,11 @@ export default function AssessmentFormDialog({
                   <div className="text-lg font-bold text-emerald-700">
                     {formatDecimal(finalSkorIndeks, 2)}
                   </div>
+                  {isMedicalUnit && isContract && (
+                    <div className="text-[10px] text-amber-700 font-semibold mt-0.5">
+                      Status Kontrak ({contractPercentage}%)
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1327,6 +1381,62 @@ export default function AssessmentFormDialog({
             ))
           )}
         </div>
+
+        {/* Fitur Status Kontrak (Khusus Unit Kerja MEDIS) */}
+        {isMedicalUnit && (
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-amber-50/90 border border-amber-300 rounded-lg">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="statusKontrakCheckbox"
+                  checked={isContract}
+                  onChange={(e) => setIsContract(e.target.checked)}
+                  disabled={isApproved || saving}
+                  className="h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                />
+                <label htmlFor="statusKontrakCheckbox" className="cursor-pointer select-none font-semibold text-xs text-amber-950">
+                  Status Kontrak
+                </label>
+              </div>
+
+              {isContract && (
+                <div className="flex items-center gap-2 pl-3 border-l border-amber-300">
+                  <span className="text-xs font-medium text-amber-900">
+                    Persentase Pengali:
+                  </span>
+                  <div className="relative flex items-center">
+                    <Input
+                      id="contractPercentageInput"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={contractPercentage}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value)
+                        setContractPercentage(isNaN(val) ? 0 : val)
+                      }}
+                      disabled={isApproved || saving}
+                      placeholder="80"
+                      className="h-7 w-20 text-xs bg-white text-center font-bold pr-5 border-amber-300 focus:border-amber-500"
+                    />
+                    <span className="absolute right-2 text-xs font-bold text-gray-500 pointer-events-none">%</span>
+                  </div>
+                  <span className="text-[11px] text-amber-700 italic">
+                    (Perolehan skor pegawai dikalikan {contractPercentage}%)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {isContract && (
+              <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-400 text-xs font-semibold">
+                Pengali Aktif: {((Number(contractPercentage) || 0) / 100).toFixed(2)}x
+              </Badge>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pt-4 border-t w-full">
           {activeRevenueType === 'bpjs' ? (
