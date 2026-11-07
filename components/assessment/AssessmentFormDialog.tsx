@@ -73,6 +73,7 @@ interface SubAssessmentData {
   sub_indicator_id: string
   realization_value: number
   score: number
+  notes?: string
 }
 
 interface AssessmentData {
@@ -217,14 +218,16 @@ export default function AssessmentFormDialog({
                 id: item.id,
                 sub_indicator_id: item.sub_indicator_id,
                 realization_value: subRealiz,
-                score: subSc
+                score: subSc,
+                notes: item.notes || ''
               }
             } else {
               assessmentMap[indicatorId].sub_assessments.push({
                 id: item.id,
                 sub_indicator_id: item.sub_indicator_id,
                 realization_value: subRealiz,
-                score: subSc
+                score: subSc,
+                notes: item.notes || ''
               })
             }
           } else {
@@ -251,7 +254,8 @@ export default function AssessmentFormDialog({
                   assessment.sub_assessments.push({
                     sub_indicator_id: sub.id,
                     realization_value: assessment.realization_value,
-                    score: assessment.score || assessment.realization_value
+                    score: assessment.score || assessment.realization_value,
+                    notes: assessment.notes || ''
                   })
                 }
               }
@@ -263,7 +267,8 @@ export default function AssessmentFormDialog({
                   assessment.sub_assessments.push({
                     sub_indicator_id: sub.id,
                     realization_value: assessment.realization_value,
-                    score: assessment.score || assessment.realization_value
+                    score: assessment.score || assessment.realization_value,
+                    notes: assessment.notes || ''
                   })
                 }
               }
@@ -304,7 +309,7 @@ export default function AssessmentFormDialog({
     let derivedRealizationValue = inputRealization
 
     if (indicator) {
-      const isPriority = indicator.calculation_method === 'priority' || category?.configuration_style === 'activity'
+      const isPriority = indicator.calculation_method === 'priority'
       const isUnweightedCat = category?.is_weighted === false
 
       if (isPriority) {
@@ -335,7 +340,7 @@ export default function AssessmentFormDialog({
     }))
   }
 
-  const handleSubAssessmentChange = (indicatorId: string, subIndicatorId: string, realizationValue: number, score: number) => {
+  const handleSubAssessmentChange = (indicatorId: string, subIndicatorId: string, realizationValue: number, score: number, notes?: string) => {
     setAssessments(prev => {
       const current = prev[indicatorId] || {
         indicator_id: indicatorId,
@@ -350,9 +355,20 @@ export default function AssessmentFormDialog({
       const index = subAssessments.findIndex(s => s.sub_indicator_id === subIndicatorId)
 
       if (index >= 0) {
-        subAssessments[index] = { id: subAssessments[index].id, sub_indicator_id: subIndicatorId, realization_value: realizationValue, score }
+        subAssessments[index] = { 
+          id: subAssessments[index].id, 
+          sub_indicator_id: subIndicatorId, 
+          realization_value: realizationValue, 
+          score,
+          notes: notes !== undefined ? notes : (subAssessments[index].notes || '')
+        }
       } else {
-        subAssessments.push({ sub_indicator_id: subIndicatorId, realization_value: realizationValue, score })
+        subAssessments.push({ 
+          sub_indicator_id: subIndicatorId, 
+          realization_value: realizationValue, 
+          score,
+          notes: notes || ''
+        })
       }
 
       // Find the indicator to get sub-indicator weights and target
@@ -387,11 +403,11 @@ export default function AssessmentFormDialog({
         sumScores = current.score
       }
       const category = categories.find(c => c.indicators.some(i => i.id === indicatorId))
-      const isPriority = indicator && (indicator.calculation_method === 'priority' || category?.configuration_style === 'activity')
+      const isPriority = indicator && indicator.calculation_method === 'priority'
 
       // If qualitative sub-indicators without target, use sum of scores without cap.
       const maxTarget = indicator ? getIndicatorTarget(indicator) : 0
-      const finalScore = isPriority ? Number(sumScores.toFixed(4)) : (indicator && indicator.sub_indicators.length > 0 && maxTarget === 0 ? sumScores : calculateScore(totalAchievement))
+      const finalScore = isPriority ? Number(sumScores.toFixed(4)) : (indicator && indicator.sub_indicators.length > 0 && maxTarget === 0 ? Number(sumScores.toFixed(4)) : calculateScore(totalAchievement))
 
       return {
         ...prev,
@@ -450,7 +466,8 @@ export default function AssessmentFormDialog({
               code: subConfig.code,
               name: subConfig.name,
               realization_value: realVal,
-              score: calculatedScore
+              score: calculatedScore,
+              notes: existing?.notes || ''
             }
           })
 
@@ -527,7 +544,8 @@ export default function AssessmentFormDialog({
               assessmentMap[indicatorId].sub_assessments.push({
                 sub_indicator_id: item.sub_indicator_id,
                 realization_value: item.realization_value,
-                score: item.score || 0
+                score: item.score || 0,
+                notes: item.notes || ''
               })
             } else {
               assessmentMap[indicatorId].realization_value = item.realization_value
@@ -589,7 +607,8 @@ export default function AssessmentFormDialog({
                   code: subConfig.code,
                   name: subConfig.name,
                   realization_value: existing?.realization_value ?? fallbackVal,
-                  score: existing?.score ?? fallbackScore
+                  score: existing?.score ?? fallbackScore,
+                  notes: existing?.notes || ''
                 }
               })
 
@@ -736,11 +755,12 @@ export default function AssessmentFormDialog({
 
           let totalSkorIndeks = 0;
           let totalSkorPrioritas = 0;
+          const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
 
           categories.forEach(category => {
             category.indicators.forEach(indicator => {
               const assessment = assessments[indicator.id]
-              const isPriority = indicator.calculation_method === 'priority' || category.configuration_style === 'activity'
+              const isPriority = indicator.calculation_method === 'priority'
               if (isPriority) {
                 if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
                   let subPrioSum = 0
@@ -786,10 +806,16 @@ export default function AssessmentFormDialog({
                   const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
                   if (subConf) {
                     hasSubData = true
-                    const w = isMedicalUnit ? 1 : (subConf.weight_percentage / 100)
-                    const subScore = (sub.score !== undefined && sub.score !== null && sub.score !== 0)
-                      ? sub.score
-                      : (Number(sub.realization_value) || 0)
+                    const isQuant = subConf.measurement_type === 'quantitative'
+                    let subScore = Number(sub.score || 0)
+                    if (isQuant) {
+                      const tariff = Number(subConf.base_index_value || 1)
+                      const realScore = Number(sub.realization_value || 0) * tariff
+                      if (subScore === 0 || (realScore > 0 && Math.abs(subScore - realScore) > 0.0001)) {
+                        subScore = realScore
+                      }
+                    }
+                    const w = (isMedicalUnit || isQuant) ? 1 : (subConf.weight_percentage / 100)
                     calcSum += subScore * w
                   }
                 })
@@ -805,10 +831,12 @@ export default function AssessmentFormDialog({
                   totalRealisasiKategori += (indRealisasi * (indWeight / 100))
                   totalTargetKategori += (indTarget * (indWeight / 100))
                 } else {
-                  // Unweighted category: sum indicators as raw achievement vs 100
-                  const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : 0
+                  // Unweighted category: sum indicators as raw achievement vs 100, or raw points if target=0
+                  const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : indRealisasi
                   totalRealisasiKategori += ach
-                  totalTargetKategori += 100
+                  if (indTarget > 0) {
+                    totalTargetKategori += 100
+                  }
                 }
               }
             })
@@ -830,7 +858,7 @@ export default function AssessmentFormDialog({
               }
             }
 
-            const poinAkhir = isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir;
+            const poinAkhir = round2(isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir);
             totalSkorIndeks += poinAkhir;
 
             return (
@@ -840,20 +868,25 @@ export default function AssessmentFormDialog({
                     Total {catCode} ({porsiKategori}%)
                   </CardTitle>
                   <Badge variant="secondary" className="text-[10px] font-medium px-1.5 py-0 border-blue-200 bg-blue-50 text-blue-700">
-                    {poinAkhir.toFixed(2)}
+                    {formatDecimal(poinAkhir, 2)}
                   </Badge>
                 </CardHeader>
                 <CardContent className="py-0 px-3 pb-2">
                   <div className="text-base font-bold text-gray-900">
-                    {poinAkhir.toFixed(2)}
+                    {formatDecimal(poinAkhir, 2)}
                   </div>
                   <div className="text-[10px] text-gray-400">
-                    {totalRealisasiKategori.toFixed(2)} / {totalTargetKategori.toFixed(2)}
+                    {totalTargetKategori > 0
+                      ? `${formatDecimal(totalRealisasiKategori, 2)} / ${formatDecimal(totalTargetKategori, 2)}`
+                      : `${formatDecimal(totalRealisasiKategori, 2)} Poin`}
                   </div>
                 </CardContent>
               </Card>
             )
           })
+
+          const finalSkorIndeks = round2(totalSkorIndeks);
+          const finalSkorPrioritas = round2(totalSkorPrioritas);
 
           return (
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
@@ -886,7 +919,7 @@ export default function AssessmentFormDialog({
                 </CardHeader>
                 <CardContent className="py-0 px-3 pb-2">
                   <div className="text-lg font-bold text-emerald-700">
-                    {totalSkorIndeks.toFixed(2)}
+                    {formatDecimal(finalSkorIndeks, 2)}
                   </div>
                 </CardContent>
               </Card>
@@ -900,7 +933,7 @@ export default function AssessmentFormDialog({
                 </CardHeader>
                 <CardContent className="py-0 px-3 pb-2">
                   <div className="text-lg font-bold text-purple-700">
-                    {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(totalSkorPrioritas)}
+                    {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(finalSkorPrioritas)}
                   </div>
                 </CardContent>
               </Card>
@@ -977,7 +1010,7 @@ export default function AssessmentFormDialog({
                             calcSum += (sub.realization_value || 0) * w
                           }
                         })
-                        achievementPct = calcSum;
+                        achievementPct = (isMedicalUnit || isQuant || indicator.calculation_method === 'priority') ? 100 : calcSum;
                         score = calcSum;
                       }
 
@@ -1199,12 +1232,21 @@ export default function AssessmentFormDialog({
                                       ) : hasCriteria ? (
                                         <div className="flex flex-col gap-1.5 mt-1">
                                           {(() => {
-                                            const anyMatched = sub.scoring_criteria.some(c => Math.abs(Number(subRealization) - Number(c.score)) < 0.001)
+                                            const hasDuplicates = sub.scoring_criteria.some((c, idx) =>
+                                              sub.scoring_criteria.some((other, oIdx) => idx !== oIdx && Math.abs(Number(c.score) - Number(other.score)) < 0.001)
+                                            )
+                                            const anyMatched = sub.scoring_criteria.some(c => {
+                                              const isScoreMatch = Math.abs(Number(subRealization) - Number(c.score)) < 0.001
+                                              if (hasDuplicates) {
+                                                return isScoreMatch && subAssessment?.notes === c.label
+                                              }
+                                              return isScoreMatch
+                                            })
                                             if (!anyMatched && subRealization > 0) {
                                               return (
                                                 <div className="w-full mb-1">
                                                   <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
-                                                    Nilai sebelumnya: {subRealization} (pilih salah satu opsi untuk memperbarui)
+                                                    Nilai saat ini: {subRealization >= 1000 ? 'Rp ' + Number(subRealization).toLocaleString('id-ID') : subRealization} (silakan pilih salah satu opsi di bawah untuk menetapkan pilihan)
                                                   </span>
                                                 </div>
                                               )
@@ -1213,7 +1255,12 @@ export default function AssessmentFormDialog({
                                           })()}
                                           <div className="flex flex-wrap gap-2">
                                             {sub.scoring_criteria.map((criterion, cIdx) => {
-                                              const isSelected = Math.abs(Number(subRealization) - Number(criterion.score)) < 0.001
+                                              const duplicateCount = sub.scoring_criteria.filter(c => Math.abs(Number(c.score) - Number(criterion.score)) < 0.001).length
+                                              const isScoreMatch = Math.abs(Number(subRealization) - Number(criterion.score)) < 0.001
+                                              const isSelected = duplicateCount > 1
+                                                ? (isScoreMatch && subAssessment?.notes === criterion.label)
+                                                : isScoreMatch
+
                                               return (
                                                 <Button
                                                   key={cIdx}
@@ -1226,9 +1273,9 @@ export default function AssessmentFormDialog({
                                                       ? "bg-blue-600 text-white hover:bg-blue-700 border-blue-600 shadow-sm ring-2 ring-blue-400 font-semibold"
                                                       : "bg-white text-gray-700 hover:bg-blue-50 hover:text-blue-600 border-gray-200"
                                                   )}
-                                                  onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
+                                                  onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score, criterion.label)}
                                                 >
-                                                  {criterion.label} ({criterion.score})
+                                                  {criterion.label} ({criterion.score >= 1000 ? 'Rp ' + Number(criterion.score).toLocaleString('id-ID') : criterion.score})
                                                 </Button>
                                               )
                                             })}

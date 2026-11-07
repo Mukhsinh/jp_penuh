@@ -55,6 +55,7 @@ export async function GET(request: NextRequest) {
     const action = searchParams.get('action')
     const period = searchParams.get('period')
     const unitId = searchParams.get('unit_id')
+    const revenueType = searchParams.get('revenue_type') || 'bpjs'
 
     // Check authentication
     const user = await getAuthenticatedUser(supabase, request)
@@ -75,13 +76,13 @@ export async function GET(request: NextRequest) {
         if (!period) {
           return NextResponse.json({ success: false, error: 'Period is required' }, { status: 400 })
         }
-        return await getAssessmentReport(adminClient, currentEmp, period, unitId)
+        return await getAssessmentReport(adminClient, currentEmp, period, unitId, revenueType)
 
       case 'comparison':
         if (!period) {
           return NextResponse.json({ success: false, error: 'Period is required' }, { status: 400 })
         }
-        return await getPeriodComparison(adminClient, currentEmp, period, unitId)
+        return await getPeriodComparison(adminClient, currentEmp, period, unitId, revenueType)
 
       default:
         return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 })
@@ -138,7 +139,51 @@ async function getAvailableUnits(supabase: any, currentEmp: any) {
   return NextResponse.json({ success: true, units: filteredUnits })
 }
 
-async function getAssessmentReport(supabase: any, currentEmp: any, period: string, unitId?: string | null) {
+async function batchedIn(
+  supabase: any,
+  table: string,
+  selectFields: string,
+  filterColumn: string,
+  filterValues: string[],
+  additionalFilters?: (q: any) => any,
+  batchSize: number = 20
+): Promise<any[]> {
+  if (filterValues.length === 0) return []
+  const results: any[] = []
+  const pageSize = 1000
+
+  for (let i = 0; i < filterValues.length; i += batchSize) {
+    const batch = filterValues.slice(i, i + batchSize)
+    let page = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const from = page * pageSize
+      const to = from + pageSize - 1
+
+      let query = supabase.from(table).select(selectFields).in(filterColumn, batch).range(from, to)
+      if (additionalFilters) query = additionalFilters(query)
+
+      const { data, error } = await query
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        results.push(...data)
+        if (data.length < pageSize) {
+          hasMore = false
+        } else {
+          page++
+        }
+      } else {
+        hasMore = false
+      }
+    }
+  }
+
+  return results
+}
+
+async function getAssessmentReport(supabase: any, currentEmp: any, period: string, unitId?: string | null, revenueType: string = 'bpjs') {
   const userRole = currentEmp?.role
   const userUnitId = currentEmp?.unit_id
 
@@ -219,6 +264,8 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
     .from('t_kpi_assessments')
     .select('employee_id, indicator_id')
     .eq('period', period)
+    .or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+    .is('sub_indicator_id', null)
 
   const assessmentsCountByEmployee = (assessmentsCountData || []).reduce((acc: any, curr: any) => {
     acc[curr.employee_id] = (acc[curr.employee_id] || 0) + 1
@@ -250,39 +297,66 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const totalEmployees = employeesData.length
   const completionRate = totalEmployees > 0 ? (completedEmployees / totalEmployees) * 100 : 0
 
-  // Get detailed assessment data for score calculations with inner join
-  let assessmentQuery = supabase
-    .from('t_kpi_assessments')
-    .select(`
-      *,
-      m_employees!inner!employee_id (
-        full_name,
-        role,
-        unit_id,
-        m_units!unit_id (name)
-      ),
-      m_kpi_indicators!inner!indicator_id (
-        name,
-        calculation_method,
-        m_kpi_categories!inner!category_id (
-          category
-        )
-      )
-    `)
-    .eq('period', period)
-    .neq('m_employees.role', 'superadmin')
+  const empIds = employeesData.map((e: any) => e.id)
 
-  // Apply same unit filtering
-  if (unitId && unitId !== 'all') {
-    assessmentQuery = assessmentQuery.eq('m_employees.unit_id', unitId)
+  // Pre-fetch sub-assessments aggregate using batchedIn to guarantee zero pagination truncation
+  const rawSubData = await batchedIn(
+    supabase,
+    't_kpi_assessments',
+    `id, employee_id, indicator_id, sub_indicator_id, score, realization_value, updated_at, created_at, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)`,
+    'employee_id',
+    empIds,
+    q => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`).not('sub_indicator_id', 'is', null)
+  )
+
+  // Deduplicate sub-assessments by employee_id + indicator_id + sub_indicator_id
+  const uniqueSubMap = new Map<string, any>()
+  for (const s of rawSubData || []) {
+    if (s.m_kpi_sub_indicators?.indicator_id && s.m_kpi_sub_indicators.indicator_id !== s.indicator_id) {
+      continue
+    }
+    const key = `${s.employee_id}:${s.indicator_id}:${s.sub_indicator_id}`
+    const existing = uniqueSubMap.get(key)
+    if (!existing) {
+      uniqueSubMap.set(key, s)
+    } else {
+      const existingTime = new Date(existing.updated_at || existing.created_at || 0).getTime()
+      const newTime = new Date(s.updated_at || s.created_at || 0).getTime()
+      if (newTime > existingTime) {
+        uniqueSubMap.set(key, s)
+      }
+    }
   }
 
-  const { data: assessmentData, error: assessmentError } = await assessmentQuery
+  const subAggMap = new Map<string, number>()
+  for (const s of Array.from(uniqueSubMap.values())) {
+    const key = `${s.employee_id}:${s.indicator_id}`
+    const isQuant = s.m_kpi_sub_indicators?.measurement_type === 'quantitative'
+    let effectiveScore = Number(s.score || 0)
 
-  if (assessmentError) {
-    console.error('Report assessmentQuery error:', assessmentError)
-    return NextResponse.json({ success: false, error: assessmentError.message }, { status: 500 })
+    if (isQuant) {
+      const tariff = Number(s.m_kpi_sub_indicators?.base_index_value || 1)
+      const realScore = Number(s.realization_value || 0) * tariff
+      if (Math.abs(realScore) > 0 && effectiveScore !== realScore && (Math.abs(tariff) > 1 || (tariff > 0 && Math.abs(tariff - 1) > 0.00001))) {
+        effectiveScore = realScore
+      }
+      if (effectiveScore === 0 && Math.abs(realScore) > 0) {
+        effectiveScore = realScore
+      }
+    }
+
+    subAggMap.set(key, (subAggMap.get(key) || 0) + effectiveScore)
   }
+
+  // Get detailed assessment data for score calculations with inner join (MAIN rows only) using batchedIn
+  const assessmentData = await batchedIn(
+    supabase,
+    't_kpi_assessments',
+    `*, m_employees!inner!employee_id (full_name, role, unit_id, m_units!unit_id (name)), m_kpi_indicators!inner!indicator_id (name, calculation_method, m_kpi_categories!inner!category_id (category))`,
+    'employee_id',
+    empIds,
+    q => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`).is('sub_indicator_id', null)
+  )
 
   // Calculate category averages
   const employeeScores = new Map()
@@ -290,7 +364,11 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
 
   assessmentData?.forEach((assessment: any) => {
     const category = assessment.m_kpi_indicators?.m_kpi_categories?.category?.toLowerCase() || ''
-    const score = assessment.score || 0
+    const subSum = subAggMap.get(`${assessment.employee_id}:${assessment.indicator_id}`)
+    let score = subSum !== undefined ? subSum : (Number(assessment.score) || 0)
+    if (score === 0 && Number(assessment.realization_value) > 0) {
+      score = Number(assessment.realization_value)
+    }
     const achievement = assessment.achievement_percentage || 0
     const employeeId = assessment.employee_id
     const indicatorName = assessment.m_kpi_indicators?.name || '-'
@@ -331,16 +409,18 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   let reportOverallTotal = 0;
   let empCount = 0;
 
+  const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
+
   // Calculate top performers and unit averages
   const topPerformers = Array.from(employeeScores.entries())
     .map(([employeeId, data]: [string, any]) => {
       const isMedical = isMedicalUnit(null, data.unit_name);
 
-      const p1 = calculateCategoryScore(data.p1_scores, isMedical);
-      const p2 = calculateCategoryScore(data.p2_scores, isMedical);
-      const p3 = calculateCategoryScore(data.p3_scores, isMedical);
+      const p1 = round2(calculateCategoryScore(data.p1_scores, isMedical));
+      const p2 = round2(calculateCategoryScore(data.p2_scores, isMedical));
+      const p3 = round2(calculateCategoryScore(data.p3_scores, isMedical));
 
-      const total_score = calculateTotalScore(p1, p2, p3, isMedical);
+      const total_score = round2(calculateTotalScore(p1, p2, p3, isMedical));
 
       reportP1Total += p1;
       reportP2Total += p2;

@@ -311,7 +311,7 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     doc.text(`: ${formatScore(totalSkorUnit)}`, 95, yPos)
     yPos += 5
     doc.text(`Nilai PIR`, 20, yPos)
-    doc.text(`: Rp ${formatScore(pirValue)}`, 95, yPos)
+    doc.text(`: Rp ${formatScore(pirValue, pirValue > 0 && pirValue < 100 ? 4 : 2)}`, 95, yPos)
     yPos += 3
 
     // === PERHITUNGAN INSENTIF ===
@@ -565,7 +565,7 @@ export async function generateSummaryReportPDF(
       formatScore(r.p3_score),
       formatScore(r.total_score),
       Number(r.total_priority_score || r.total_activity_rupiah || r.total_activity || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-      formatScore(r.pir_value),
+      formatScore(r.pir_value, Number(r.pir_value || 0) > 0 && Number(r.pir_value || 0) < 100 ? 4 : 2),
       Number(r.potongan || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
       Number(r.distribusi_potongan || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
       Number(r.gross_incentive || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
