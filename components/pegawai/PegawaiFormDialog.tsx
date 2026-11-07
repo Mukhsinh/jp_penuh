@@ -22,6 +22,7 @@ interface PegawaiFormDialogProps {
   onClose: () => void
   onSuccess: () => void
   pegawai?: Pegawai | null
+  selectedPeriod?: string
 }
 
 interface Unit {
@@ -29,7 +30,7 @@ interface Unit {
   name: string
 }
 
-export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai }: PegawaiFormDialogProps) {
+export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai, selectedPeriod }: PegawaiFormDialogProps) {
   const [loading, setLoading] = useState(false)
   const [units, setUnits] = useState<Unit[]>([])
   const [formData, setFormData] = useState({
@@ -119,10 +120,10 @@ export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai }: Pegawai
     let result
     if (pegawai) {
       // Update existing pegawai
-      result = await updatePegawai(pegawai.id, formData as any)
+      result = await updatePegawai(pegawai.id, formData as any, selectedPeriod)
     } else {
       // Create new pegawai
-      result = await createPegawai(formData as any)
+      result = await createPegawai(formData as any, selectedPeriod)
     }
 
     setLoading(false)

@@ -272,12 +272,25 @@ export async function POST(request: NextRequest) {
     }
 
     if (unitId && unitId !== 'all') {
-      // If a unit is specified, we check if there are assessments for employees in that unit
-      const { data: unitEmps } = await supabase
-        .from('m_employees')
-        .select('id')
+      // If a unit is specified, we check if there are assessments for employees in that unit for this period
+      let unitEmps: any[] = []
+      const { data: snapEmps } = await supabase
+        .from('t_employee_period_snapshots')
+        .select('employee_id')
+        .eq('period', period)
         .eq('unit_id', unitId)
         .range(0, 9999)
+
+      if (snapEmps && snapEmps.length > 0) {
+        unitEmps = snapEmps.map((e: any) => ({ id: e.employee_id }))
+      } else {
+        const { data: mEmps } = await supabase
+          .from('m_employees')
+          .select('id')
+          .eq('unit_id', unitId)
+          .range(0, 9999)
+        unitEmps = mEmps || []
+      }
 
       const empIds = unitEmps?.map(e => e.id) || []
       if (empIds.length > 0) {
@@ -418,23 +431,43 @@ export async function POST(request: NextRequest) {
 
     try {
       // --- Summary Logic Sync ---
-      let empListQuery = supabase
-        .from('m_employees')
-        .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
-        .eq('is_active', true)
-        .neq('role', 'superadmin')
-        .neq('m_units.code', 'ADMIN')
+      const { count: snapCount } = await supabase
+        .from('t_employee_period_snapshots')
+        .select('id', { count: 'exact', head: true })
+        .eq('period', period)
+
+      const useSnap = Boolean(snapCount && snapCount > 0)
+
+      let empListQuery = useSnap
+        ? supabase
+            .from('t_employee_period_snapshots')
+            .select('employee_id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
+            .eq('period', period)
+            .eq('is_active', true)
+            .neq('role', 'superadmin')
+            .neq('m_units.code', 'ADMIN')
+        : supabase
+            .from('m_employees')
+            .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
+            .eq('is_active', true)
+            .neq('role', 'superadmin')
+            .neq('m_units.code', 'ADMIN')
 
       if (effectiveUnitId) {
         empListQuery = empListQuery.eq('unit_id', effectiveUnitId)
       }
 
-      const { data: unitEmployees, error: unitEmpErr } = await empListQuery.range(0, 9999)
+      const { data: rawUnitEmployees, error: unitEmpErr } = await empListQuery.range(0, 9999)
       if (unitEmpErr) console.error('[Summary] Error fetching employees:', unitEmpErr)
 
-      const unitEmpIds = (unitEmployees || []).map(e => e.id)
+      const unitEmployees = (rawUnitEmployees || []).map((e: any) => ({
+        ...e,
+        id: useSnap ? e.employee_id : e.id
+      }))
+
+      const unitEmpIds = unitEmployees.map((e: any) => e.id)
       totalEmployeesInUnit = unitEmpIds.length
-      console.log(`[Summary] Found ${totalEmployeesInUnit} candidate employees for unit ${effectiveUnitId}`)
+      console.log(`[Summary] Found ${totalEmployeesInUnit} candidate employees for unit ${effectiveUnitId} in period ${period}`)
 
       if (totalEmployeesInUnit > 0) {
         // Use batched query to handle large units without URL overflow
@@ -604,22 +637,53 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   }
 
   // 2. Fetch active employees (fetch full unit to ensure accurate unitTotalScore and PIR calculations)
-  let empQuery = supabase
-    .from('m_employees')
-    .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, use_same_proportion, kpi_schema_mode)')
-    .eq('is_active', true)
-    .neq('role', 'superadmin')
+  const { count: snapCount } = await supabase
+    .from('t_employee_period_snapshots')
+    .select('id', { count: 'exact', head: true })
+    .eq('period', period)
+
+  const useSnap = Boolean(snapCount && snapCount > 0)
+
+  let empQuery = useSnap
+    ? supabase
+        .from('t_employee_period_snapshots')
+        .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, use_same_proportion, kpi_schema_mode)')
+        .eq('period', period)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+    : supabase
+        .from('m_employees')
+        .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage, use_same_proportion, kpi_schema_mode)')
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
 
   if (unitId && unitId !== 'all') {
     empQuery = empQuery.eq('unit_id', unitId)
   } else if (employeeId && employeeId !== 'all') {
-    const { data: targetEmp } = await supabase.from('m_employees').select('unit_id').eq('id', employeeId).maybeSingle()
-    if (targetEmp?.unit_id) {
-      empQuery = empQuery.eq('unit_id', targetEmp.unit_id)
+    let targetUnitId: string | null = null
+    if (useSnap) {
+      const { data: targetSnap } = await supabase
+        .from('t_employee_period_snapshots')
+        .select('unit_id')
+        .eq('period', period)
+        .eq('employee_id', employeeId)
+        .maybeSingle()
+      targetUnitId = targetSnap?.unit_id || null
+    }
+    if (!targetUnitId) {
+      const { data: targetEmp } = await supabase.from('m_employees').select('unit_id').eq('id', employeeId).maybeSingle()
+      targetUnitId = targetEmp?.unit_id || null
+    }
+    if (targetUnitId) {
+      empQuery = empQuery.eq('unit_id', targetUnitId)
     }
   }
 
-  const { data: allEmployees, error: allEmpError } = await empQuery.range(0, 9999)
+  const { data: rawAllEmployees, error: allEmpError } = await empQuery.range(0, 9999)
+  const allEmployees = (rawAllEmployees || []).map((e: any) => ({
+    ...e,
+    id: useSnap ? e.employee_id : e.id
+  }))
   console.log(`[Report] generateIncentiveReport: Fetched ${allEmployees?.length || 0} employees candidates for unit ${unitId}`)
 
   if (allEmpError) {
@@ -1613,21 +1677,64 @@ async function generateKPIAchievementReport(supabase: any, period: string, unitI
 
   let assessments: any[] = []
 
-  if (unitId || employeeId) {
-    const matchCriteria: any = {}
-    if (employeeId && employeeId !== 'all') {
-      matchCriteria.id = employeeId
-    } else if (unitId && unitId !== 'all') {
-      matchCriteria.unit_id = unitId
-    }
+  // Check snapshot for period
+  const { count: snapCount } = await supabase
+    .from('t_employee_period_snapshots')
+    .select('id', { count: 'exact', head: true })
+    .eq('period', period)
 
-    const { data: emps } = await supabase
-      .from('m_employees')
-      .select('id')
-      .match(matchCriteria)
+  const useSnap = Boolean(snapCount && snapCount > 0)
+  const empUnitNameMap = new Map<string, string>()
+
+  if (useSnap) {
+    const { data: snapEmpsWithUnit } = await supabase
+      .from('t_employee_period_snapshots')
+      .select('employee_id, m_units(name)')
+      .eq('period', period)
       .range(0, 9999)
 
-    const empIds = emps?.map((e: any) => e.id) || []
+    snapEmpsWithUnit?.forEach((s: any) => {
+      const u = Array.isArray(s.m_units) ? s.m_units[0] : s.m_units
+      if (u?.name) empUnitNameMap.set(s.employee_id, u.name)
+    })
+  }
+
+  if (unitId || employeeId) {
+    let empIds: string[] = []
+
+    if (useSnap) {
+      let q = supabase
+        .from('t_employee_period_snapshots')
+        .select('employee_id')
+        .eq('period', period)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+
+      if (employeeId && employeeId !== 'all') {
+        q = q.eq('employee_id', employeeId)
+      } else if (unitId && unitId !== 'all') {
+        q = q.eq('unit_id', unitId)
+      }
+
+      const { data: emps } = await q.range(0, 9999)
+      empIds = (emps || []).map((e: any) => e.employee_id)
+    } else {
+      const matchCriteria: any = {}
+      if (employeeId && employeeId !== 'all') {
+        matchCriteria.id = employeeId
+      } else if (unitId && unitId !== 'all') {
+        matchCriteria.unit_id = unitId
+      }
+
+      const { data: emps } = await supabase
+        .from('m_employees')
+        .select('id')
+        .match(matchCriteria)
+        .range(0, 9999)
+
+      empIds = emps?.map((e: any) => e.id) || []
+    }
+
     if (empIds.length === 0) return []
 
     // Use batchedIn to avoid URL overflow with large employee sets
@@ -1678,7 +1785,7 @@ async function generateKPIAchievementReport(supabase: any, period: string, unitI
     const empRecord = Array.isArray(row.m_employees) ? row.m_employees[0] : row.m_employees
     const empName = empRecord?.full_name || '-'
     const unitData = Array.isArray(empRecord?.m_units) ? empRecord?.m_units[0] : empRecord?.m_units
-    const unitName = unitData?.name || '-'
+    const unitName = empUnitNameMap.get(empId) || unitData?.name || '-'
 
     const basicVal = parseFloat(row.m_kpi_indicators.base_index_value) || 0
     const catStyle = row.m_kpi_indicators.m_kpi_categories?.configuration_style

@@ -424,6 +424,24 @@ export default function ReportsPage() {
     fetchMetadata()
   }, [])
 
+  useEffect(() => {
+    if (!selectedPeriod) return
+    const fetchEmployeesForPeriod = async () => {
+      try {
+        const res = await fetch(`/api/reports/generate/metadata?type=employees&period=${selectedPeriod}`)
+        if (res.ok) {
+          const json = await res.json()
+          if (json.data) {
+            setAvailableEmployees(json.data)
+          }
+        }
+      } catch (e) {
+        console.error('Error fetching employees for period:', e)
+      }
+    }
+    fetchEmployeesForPeriod()
+  }, [selectedPeriod])
+
   const handleGenerateReport = async () => {
     if (!selectedReport || !selectedPeriod) {
       setError('Pilih jenis laporan dan periode')

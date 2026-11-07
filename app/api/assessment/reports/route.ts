@@ -145,23 +145,43 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   // Enforce unit isolation: unit managers can strictly query their own unit only
   const effectiveUnitId = (userRole === 'unit_manager' && userUnitId) ? userUnitId : unitId
 
+  // Check if snapshot exists for period
+  const { count: snapCount } = await supabase
+    .from('t_employee_period_snapshots')
+    .select('id', { count: 'exact', head: true })
+    .eq('period', period)
+
+  const useSnapshot = Boolean(snapCount && snapCount > 0)
+
   // Build base query for employees
-  let employeeQuery = supabase
-    .from('m_employees')
-    .select('id, full_name, unit_id, m_units(name)')
-    .eq('is_active', true)
-    .neq('role', 'superadmin')
+  let employeeQuery = useSnapshot
+    ? supabase
+        .from('t_employee_period_snapshots')
+        .select('employee_id, full_name, unit_id, m_units(name)')
+        .eq('period', period)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+    : supabase
+        .from('m_employees')
+        .select('id, full_name, unit_id, m_units(name)')
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
 
   // Apply unit filtering
   if (effectiveUnitId && effectiveUnitId !== 'all') {
     employeeQuery = employeeQuery.eq('unit_id', effectiveUnitId)
   }
 
-  const { data: employeesData, error: employeeError } = await employeeQuery
+  const { data: rawEmployeesData, error: employeeError } = await employeeQuery
 
   if (employeeError) {
     return NextResponse.json({ success: false, error: employeeError.message }, { status: 500 })
   }
+
+  const employeesData = (rawEmployeesData || []).map((e: any) => ({
+    ...e,
+    id: useSnapshot ? e.employee_id : e.id
+  }))
 
   if (!employeesData || employeesData.length === 0) {
     return NextResponse.json({

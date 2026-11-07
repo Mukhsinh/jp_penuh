@@ -277,3 +277,22 @@ export function formatDayName(day: number): string {
 
   return days[day]
 }
+
+export const INDONESIAN_MONTHS = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+]
+
+/**
+ * Format period (YYYY-MM) to Indonesian month name and year (e.g. "Januari 2026")
+ */
+export function formatPeriodToMonthName(period: string): string {
+  if (!period || !period.includes('-')) return period || ''
+  const parts = period.split('-')
+  const year = parts[0]
+  const monthIdx = parseInt(parts[1], 10) - 1
+  if (monthIdx >= 0 && monthIdx < 12) {
+    return `${INDONESIAN_MONTHS[monthIdx]} ${year}`
+  }
+  return period
+}

@@ -2,19 +2,146 @@
 
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
-import type { Pegawai, CreatePegawaiData, UpdatePegawaiData } from '@/lib/types/database.types'
+import type { Pegawai, CreatePegawaiData, UpdatePegawaiData, EmployeePeriod } from '@/lib/types/database.types'
 import { isSuperAdmin as checkSuperAdmin, isUnitManager as checkUnitManager } from '@/lib/auth-utils'
+import { formatPeriodToMonthName } from '@/lib/utils/format'
+import {
+  getEmployeePeriods,
+  lockEmployeePeriod,
+  unlockEmployeePeriod,
+  createNextEmployeePeriod,
+  rotateEmployeeUnit,
+  ensureDefaultPeriodEstablished
+} from '@/lib/services/employee-period.service'
 
 /**
- * Server action to get pegawai with unit data
+ * Server action to get employee periods list
+ */
+export async function getEmployeePeriodsAction(): Promise<{ data: EmployeePeriod[]; error?: string }> {
+  return await getEmployeePeriods()
+}
+
+/**
+ * Server action to lock a period
+ */
+export async function lockEmployeePeriodAction(period: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Tidak terautentikasi' }
+
+    const isSuperAdmin = checkSuperAdmin(user as any)
+    if (!isSuperAdmin) return { success: false, error: 'Hanya Super Administrator yang berhak mengunci periode' }
+
+    const userName = user.user_metadata?.full_name || user.email || 'Administrator'
+    const result = await lockEmployeePeriod(period, userName)
+    if (result.success) {
+      revalidatePath('/pegawai')
+      revalidatePath('/assessment')
+      revalidatePath('/reports')
+    }
+    return result
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal mengunci periode' }
+  }
+}
+
+/**
+ * Server action to unlock a period
+ */
+export async function unlockEmployeePeriodAction(period: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Tidak terautentikasi' }
+
+    const isSuperAdmin = checkSuperAdmin(user as any)
+    if (!isSuperAdmin) return { success: false, error: 'Hanya Super Administrator yang berhak membuka kunci periode' }
+
+    const result = await unlockEmployeePeriod(period)
+    if (result.success) {
+      revalidatePath('/pegawai')
+      revalidatePath('/assessment')
+      revalidatePath('/reports')
+    }
+    return result
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal membuka kunci periode' }
+  }
+}
+
+/**
+ * Server action to create a new period and copy assignments
+ */
+export async function createNextPeriodAction(
+  newPeriod: string,
+  sourcePeriod?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Tidak terautentikasi' }
+
+    const isSuperAdmin = checkSuperAdmin(user as any)
+    if (!isSuperAdmin) return { success: false, error: 'Hanya Super Administrator yang berhak membuat periode baru' }
+
+    const result = await createNextEmployeePeriod(newPeriod, sourcePeriod)
+    if (result.success) {
+      revalidatePath('/pegawai')
+      revalidatePath('/assessment')
+      revalidatePath('/reports')
+    }
+    return result
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal membuat periode baru' }
+  }
+}
+
+/**
+ * Server action to quickly rotate an employee to a new unit
+ */
+export async function rotateEmployeeUnitAction(
+  period: string,
+  employeeId: string,
+  newUnitId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Tidak terautentikasi' }
+
+    const isSuperAdmin = checkSuperAdmin(user as any)
+    if (!isSuperAdmin) return { success: false, error: 'Tidak memiliki akses untuk rotasi pegawai' }
+
+    const result = await rotateEmployeeUnit(period, employeeId, newUnitId)
+    if (result.success) {
+      revalidatePath('/pegawai')
+      revalidatePath('/assessment')
+      revalidatePath('/reports')
+    }
+    return result
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal memindahkan pegawai' }
+  }
+}
+
+/**
+ * Server action to get pegawai with unit data (respecting period snapshot if available)
  */
 export async function getPegawaiWithUnits(
   page: number = 1,
   pageSize: number = 50,
   searchTerm: string = '',
-  unitId?: string
-): Promise<{ data: Pegawai[]; count: number; error?: string }> {
+  unitId?: string,
+  period?: string
+): Promise<{
+  data: Pegawai[];
+  count: number;
+  error?: string;
+  periodInfo?: { is_locked: boolean; period_name: string; locked_at?: string | null; locked_by?: string | null }
+}> {
   try {
+    await ensureDefaultPeriodEstablished()
     const supabase = await createClient()
 
     // Verify user is authenticated
@@ -33,10 +160,49 @@ export async function getPegawaiWithUnits(
     // Use admin client for superadmin to bypass RLS, otherwise use anon client
     const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
-    let query = fetchClient
-      .from('m_employees')
-      .select('*, m_units(name)', { count: 'exact' })
-      .neq('role', 'superadmin')
+    // Check if period is specified and check if snapshot exists
+    let useSnapshot = false
+    let periodInfo: any = null
+
+    if (period) {
+      const { data: periodRow } = await fetchClient
+        .from('t_employee_periods')
+        .select('*')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow) {
+        periodInfo = {
+          is_locked: periodRow.is_locked,
+          period_name: periodRow.period_name || formatPeriodToMonthName(period),
+          locked_at: periodRow.locked_at,
+          locked_by: periodRow.locked_by
+        }
+      }
+
+      const { count: snapCount } = await fetchClient
+        .from('t_employee_period_snapshots')
+        .select('id', { count: 'exact', head: true })
+        .eq('period', period)
+
+      if (snapCount && snapCount > 0) {
+        useSnapshot = true
+      }
+    }
+
+    let query: any
+    if (useSnapshot && period) {
+      query = fetchClient
+        .from('t_employee_period_snapshots')
+        .select('*, m_units(id, name, code)', { count: 'exact' })
+        .eq('period', period)
+        .neq('role', 'superadmin')
+    } else {
+      query = fetchClient
+        .from('m_employees')
+        .select('*, m_units(id, name, code)', { count: 'exact' })
+        .neq('role', 'superadmin')
+    }
 
     // If unit manager, only show their own unit
     if (isUnitManager && user.user_metadata?.unit_id) {
@@ -63,7 +229,7 @@ export async function getPegawaiWithUnits(
     const { data, error, count } = await query
 
     if (error) {
-      console.error('Query error:', error)
+      console.error('Query error in getPegawaiWithUnits:', error)
       return { data: [], count: 0, error: error.message }
     }
 
@@ -80,10 +246,11 @@ export async function getPegawaiWithUnits(
     // Transform data to match Pegawai type
     const transformedData: Pegawai[] = filteredRows.map((item: any) => ({
       ...item,
+      id: useSnapshot ? item.employee_id : item.id, // Ensure id points to employee ID
       m_units: item.m_units || undefined
     }))
 
-    return { data: transformedData, count: count || 0 }
+    return { data: transformedData, count: count || 0, periodInfo }
   } catch (err: any) {
     console.error('getPegawaiWithUnits error:', err)
     return { data: [], count: 0, error: err.message || 'Terjadi kesalahan' }
@@ -93,9 +260,25 @@ export async function getPegawaiWithUnits(
 /**
  * Server action to create new pegawai
  */
-export async function createPegawai(data: CreatePegawaiData) {
+export async function createPegawai(data: CreatePegawaiData, period?: string) {
   try {
     const supabase = await createAdminClient()
+
+    // If period is provided, check if locked
+    if (period) {
+      const { data: periodRow } = await supabase
+        .from('t_employee_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return {
+          success: false,
+          error: `Periode ${periodRow.period_name || period} telah dikunci. Penambahan pegawai baru tidak dapat dilakukan pada periode yang sudah dikunci.`
+        }
+      }
+    }
 
     // Fetch global tax mechanism from settings
     const { data: taxSetting } = await supabase
@@ -107,7 +290,6 @@ export async function createPegawai(data: CreatePegawaiData) {
     const mechanism = (taxSetting?.value as any)?.mechanism || 'TER'
     const taxType = mechanism === 'ter' || mechanism === 'TER' ? 'TER' : 'Final'
 
-    // Log data for debugging
     console.log('Creating employee with data:', data, 'using taxType:', taxType)
 
     const fallbackEmail = `${data.employee_code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaipenuh.local`
@@ -142,6 +324,33 @@ export async function createPegawai(data: CreatePegawaiData) {
       return { success: false, error: error.message }
     }
 
+    // If period is specified and unlocked, also insert into t_employee_period_snapshots
+    if (period && newPegawai) {
+      await supabase
+        .from('t_employee_period_snapshots')
+        .upsert([{
+          period,
+          employee_id: newPegawai.id,
+          employee_code: newPegawai.employee_code,
+          full_name: newPegawai.full_name,
+          unit_id: newPegawai.unit_id,
+          position: newPegawai.position,
+          role: newPegawai.role,
+          employee_status: newPegawai.employee_status,
+          employment_status: newPegawai.employment_status,
+          pns_grade: newPegawai.pns_grade,
+          tax_status: newPegawai.tax_status,
+          tax_type: newPegawai.tax_type,
+          nik: newPegawai.nik,
+          bank_name: newPegawai.bank_name,
+          bank_account_number: newPegawai.bank_account_number,
+          bank_account_name: newPegawai.bank_account_name,
+          phone: newPegawai.phone,
+          email: newPegawai.email,
+          is_active: newPegawai.is_active
+        }], { onConflict: 'period,employee_id' })
+    }
+
     revalidatePath('/pegawai')
     return { success: true }
   } catch (err: any) {
@@ -153,11 +362,15 @@ export async function createPegawai(data: CreatePegawaiData) {
 /**
  * Server action to update pegawai
  */
-export async function updatePegawai(id: string, data: UpdatePegawaiData): Promise<{ success: boolean; error?: string }> {
+export async function updatePegawai(
+  id: string,
+  data: UpdatePegawaiData,
+  period?: string
+): Promise<{ success: boolean; error?: string }> {
   try {
     const supabase = await createClient()
 
-    // Verify user is superadmin
+    // Verify user is superadmin or unit manager
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
     const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
@@ -167,49 +380,114 @@ export async function updatePegawai(id: string, data: UpdatePegawaiData): Promis
       return { success: false, error: 'Tidak memiliki akses' }
     }
 
-    // Use admin client to bypass RLS and ensure all columns are written
     const adminSupabase = await createAdminClient()
+
+    // Check period lock status
+    if (period) {
+      const { data: periodRow } = await adminSupabase
+        .from('t_employee_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return {
+          success: false,
+          error: `Periode ${periodRow.period_name || period} telah dikunci. Data pegawai pada periode ini tidak dapat diubah.`
+        }
+      }
+    }
 
     const code = data.employee_code || ''
     const fallbackEmail = `${code.toLowerCase().replace(/[^a-z0-9]/g, '')}@sungaipenuh.local`
     const finalEmail = data.email?.trim() || fallbackEmail
 
-    // If unit manager, ensure they only update employees in their unit
-    let updateQuery = adminSupabase
-      .from('m_employees')
-      .update({
-        employee_code: data.employee_code,
-        full_name: data.full_name,
-        email: finalEmail,
-        unit_id: isSuperAdmin ? data.unit_id : user.user_metadata?.unit_id,
-        position: data.position || null,
-        phone: data.phone || null,
-        nik: data.nik || null,
-        bank_name: data.bank_name || null,
-        bank_account_number: data.bank_account_number || null,
-        bank_account_name: data.bank_account_name || null,
-        tax_status: data.tax_status,
-        tax_type: data.tax_type,
-        employment_status: data.employment_status,
-        employee_status: data.employee_status || (data.employment_status as string),
-        pns_grade: data.pns_grade !== undefined ? String(data.pns_grade) : null,
-        is_active: data.is_active,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
+    const assignedUnitId = isSuperAdmin ? data.unit_id : user.user_metadata?.unit_id
 
-    if (isUnitManager) {
-      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+    // Update in period snapshot if period is specified
+    if (period) {
+      const { error: snapErr } = await adminSupabase
+        .from('t_employee_period_snapshots')
+        .update({
+          employee_code: data.employee_code,
+          full_name: data.full_name,
+          email: finalEmail,
+          unit_id: assignedUnitId,
+          position: data.position || null,
+          phone: data.phone || null,
+          nik: data.nik || null,
+          bank_name: data.bank_name || null,
+          bank_account_number: data.bank_account_number || null,
+          bank_account_name: data.bank_account_name || null,
+          tax_status: data.tax_status,
+          tax_type: data.tax_type,
+          employment_status: data.employment_status,
+          employee_status: data.employee_status || (data.employment_status as string),
+          pns_grade: data.pns_grade !== undefined ? String(data.pns_grade) : null,
+          is_active: data.is_active,
+          updated_at: new Date().toISOString()
+        })
+        .eq('period', period)
+        .eq('employee_id', id)
+
+      if (snapErr) {
+        console.error('Update snapshot error:', snapErr)
+      }
     }
 
-    const { error } = await updateQuery
+    // Check if this update should also sync to m_employees (if no period or if period is latest open period)
+    let syncToMaster = true
+    if (period) {
+      const { data: laterPeriods } = await adminSupabase
+        .from('t_employee_periods')
+        .select('period')
+        .gt('period', period)
+        .limit(1)
 
-    if (error) {
-      console.error('Update error:', error)
-      return { success: false, error: error.message }
+      if (laterPeriods && laterPeriods.length > 0) {
+        syncToMaster = false // Do not overwrite master with old period edits
+      }
+    }
+
+    if (syncToMaster) {
+      let updateQuery = adminSupabase
+        .from('m_employees')
+        .update({
+          employee_code: data.employee_code,
+          full_name: data.full_name,
+          email: finalEmail,
+          unit_id: assignedUnitId,
+          position: data.position || null,
+          phone: data.phone || null,
+          nik: data.nik || null,
+          bank_name: data.bank_name || null,
+          bank_account_number: data.bank_account_number || null,
+          bank_account_name: data.bank_account_name || null,
+          tax_status: data.tax_status,
+          tax_type: data.tax_type,
+          employment_status: data.employment_status,
+          employee_status: data.employee_status || (data.employment_status as string),
+          pns_grade: data.pns_grade !== undefined ? String(data.pns_grade) : null,
+          is_active: data.is_active,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+
+      if (isUnitManager) {
+        updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+      }
+
+      const { error } = await updateQuery
+
+      if (error) {
+        console.error('Update error in master:', error)
+        return { success: false, error: error.message }
+      }
     }
 
     revalidatePath('/pegawai')
+    revalidatePath('/assessment')
+    revalidatePath('/reports')
     return { success: true }
   } catch (err: any) {
     console.error('updatePegawai error:', err)
@@ -220,11 +498,10 @@ export async function updatePegawai(id: string, data: UpdatePegawaiData): Promis
 /**
  * Server action to delete pegawai
  */
-export async function deletePegawai(id: string): Promise<{ success: boolean; error?: string }> {
+export async function deletePegawai(id: string, period?: string): Promise<{ success: boolean; error?: string }> {
   try {
     const supabase = await createClient()
 
-    // Verify user is superadmin
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
     const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
@@ -234,7 +511,25 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
       return { success: false, error: 'Tidak memiliki akses' }
     }
 
-    let deleteQuery = supabase
+    const adminSupabase = await createAdminClient()
+
+    // If period is provided, check if locked
+    if (period) {
+      const { data: periodRow } = await adminSupabase
+        .from('t_employee_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return {
+          success: false,
+          error: `Periode ${periodRow.period_name || period} telah dikunci. Pegawai tidak dapat dihapus pada periode yang sudah dikunci.`
+        }
+      }
+    }
+
+    let deleteQuery = adminSupabase
       .from('m_employees')
       .delete()
       .eq('id', id)
@@ -251,6 +546,8 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
     }
 
     revalidatePath('/pegawai')
+    revalidatePath('/assessment')
+    revalidatePath('/reports')
     return { success: true }
   } catch (err: any) {
     console.error('deletePegawai error:', err)
@@ -261,11 +558,10 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
 /**
  * Server action to activate pegawai
  */
-export async function activatePegawai(id: string): Promise<{ success: boolean; error?: string }> {
+export async function activatePegawai(id: string, period?: string): Promise<{ success: boolean; error?: string }> {
   try {
     const supabase = await createClient()
 
-    // Verify user is superadmin or manager
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
     const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
@@ -276,6 +572,28 @@ export async function activatePegawai(id: string): Promise<{ success: boolean; e
     }
 
     const adminSupabase = await createAdminClient()
+
+    if (period) {
+      const { data: periodRow } = await adminSupabase
+        .from('t_employee_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return {
+          success: false,
+          error: `Periode ${periodRow.period_name || period} telah dikunci.`
+        }
+      }
+
+      await adminSupabase
+        .from('t_employee_period_snapshots')
+        .update({ is_active: true, updated_at: new Date().toISOString() })
+        .eq('period', period)
+        .eq('employee_id', id)
+    }
+
     let updateQuery = adminSupabase
       .from('m_employees')
       .update({ is_active: true, updated_at: new Date().toISOString() })
@@ -305,11 +623,10 @@ export async function activatePegawai(id: string): Promise<{ success: boolean; e
 /**
  * Server action to deactivate pegawai
  */
-export async function deactivatePegawai(id: string): Promise<{ success: boolean; error?: string }> {
+export async function deactivatePegawai(id: string, period?: string): Promise<{ success: boolean; error?: string }> {
   try {
     const supabase = await createClient()
 
-    // Verify user is superadmin or manager
     const { data: { user } } = await supabase.auth.getUser()
     const authRole = user?.app_metadata?.role || user?.user_metadata?.role
     const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaipenuh.com'
@@ -320,6 +637,28 @@ export async function deactivatePegawai(id: string): Promise<{ success: boolean;
     }
 
     const adminSupabase = await createAdminClient()
+
+    if (period) {
+      const { data: periodRow } = await adminSupabase
+        .from('t_employee_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return {
+          success: false,
+          error: `Periode ${periodRow.period_name || period} telah dikunci.`
+        }
+      }
+
+      await adminSupabase
+        .from('t_employee_period_snapshots')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('period', period)
+        .eq('employee_id', id)
+    }
+
     let updateQuery = adminSupabase
       .from('m_employees')
       .update({ is_active: false, updated_at: new Date().toISOString() })
@@ -353,7 +692,6 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
   try {
     const supabase = await createClient()
 
-    // Verify user is authenticated
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
       return { data: [], error: 'Tidak terautentikasi' }
@@ -368,7 +706,6 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
       userRole === 'superadmin' ||
       email === 'admin@sungaipenuh.com'
 
-    // Use admin client for superadmin to bypass RLS
     const fetchClient = isSuperAdmin ? await createAdminClient() : supabase
 
     const { data, error } = await fetchClient
@@ -394,10 +731,11 @@ export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string;
     return { data: [], error: err.message || 'Terjadi kesalahan' }
   }
 }
+
 /**
- * Server action to get aggregate stats for pegawai dashboard
+ * Server action to get aggregate stats for pegawai dashboard (respecting period)
  */
-export async function getPegawaiStats(unitId?: string): Promise<{
+export async function getPegawaiStats(unitId?: string, period?: string): Promise<{
   total: number;
   byGrade: Array<{ name: string; value: number }>;
   byStatus: Array<{ name: string; value: number }>;
@@ -411,13 +749,35 @@ export async function getPegawaiStats(unitId?: string): Promise<{
 
     const adminSupabase = await createAdminClient()
 
-    // Fetch all active employees (excluding superadmin and ADMIN unit)
-    let query = adminSupabase
-      .from('m_employees')
-      .select('pns_grade, employment_status, unit_id, m_units!inner(name, code)')
-      .eq('is_active', true)
-      .neq('role', 'superadmin')
-      .neq('m_units.code', 'ADMIN')
+    let useSnapshot = false
+    if (period) {
+      const { count } = await adminSupabase
+        .from('t_employee_period_snapshots')
+        .select('id', { count: 'exact', head: true })
+        .eq('period', period)
+
+      if (count && count > 0) {
+        useSnapshot = true
+      }
+    }
+
+    let query: any
+    if (useSnapshot && period) {
+      query = adminSupabase
+        .from('t_employee_period_snapshots')
+        .select('pns_grade, employment_status, unit_id, m_units!inner(name, code)')
+        .eq('period', period)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+        .neq('m_units.code', 'ADMIN')
+    } else {
+      query = adminSupabase
+        .from('m_employees')
+        .select('pns_grade, employment_status, unit_id, m_units!inner(name, code)')
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+        .neq('m_units.code', 'ADMIN')
+    }
 
     // Apply unit filter
     if (unitId && unitId !== 'all') {
@@ -429,7 +789,7 @@ export async function getPegawaiStats(unitId?: string): Promise<{
     if (error) throw error
 
     // Exclude superadmin unit employees
-    const validEmps = (data || []).filter(p => {
+    const validEmps = (data || []).filter((p: any) => {
       const u = Array.isArray(p.m_units) ? p.m_units[0] : p.m_units
       const code = String(u?.code || '').toUpperCase()
       const name = String(u?.name || '').toUpperCase()
@@ -441,7 +801,7 @@ export async function getPegawaiStats(unitId?: string): Promise<{
     const statusMap = new Map<string, number>()
     const unitMap = new Map<string, number>()
 
-    validEmps.forEach(p => {
+    validEmps.forEach((p: any) => {
       // Grade stats
       const grade = p.pns_grade || 'Non-PNS'
       gradeMap.set(grade, (gradeMap.get(grade) || 0) + 1)

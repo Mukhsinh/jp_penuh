@@ -45,26 +45,54 @@ interface AssessmentStatus {
 async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, period: string, revenueType: string = 'bpjs'): Promise<AssessmentStatus[]> {
   let result: AssessmentStatus[] = []
 
-  let empQuery = supabase
-    .from('m_employees')
-    .select(`
-      id,
-      full_name,
-      unit_id,
-      role,
-      m_units!inner (
-        name,
-        code
-      )
-    `)
-    .eq('is_active', true)
-    .neq('role', 'superadmin')
+  // Check if snapshot exists for period
+  const { count: snapCount } = await supabase
+    .from('t_employee_period_snapshots')
+    .select('id', { count: 'exact', head: true })
+    .eq('period', period)
+
+  const useSnapshot = Boolean(snapCount && snapCount > 0)
+
+  let empQuery = useSnapshot
+    ? supabase
+        .from('t_employee_period_snapshots')
+        .select(`
+          employee_id,
+          full_name,
+          unit_id,
+          role,
+          m_units!inner (
+            name,
+            code
+          )
+        `)
+        .eq('period', period)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+    : supabase
+        .from('m_employees')
+        .select(`
+          id,
+          full_name,
+          unit_id,
+          role,
+          m_units!inner (
+            name,
+            code
+          )
+        `)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
 
   if (unitIdFilter && unitIdFilter !== '0') {
     empQuery = empQuery.eq('unit_id', unitIdFilter)
   }
 
-  const { data: directEmps } = await empQuery.order('full_name')
+  const { data: rawDirectEmps } = await empQuery.order('full_name')
+  const directEmps = (rawDirectEmps || []).map((e: any) => ({
+    ...e,
+    id: useSnapshot ? e.employee_id : e.id
+  }))
 
   if (directEmps && directEmps.length > 0) {
     // Step 1: Preload kpi unit schemas and active categories

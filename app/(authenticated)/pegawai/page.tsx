@@ -4,7 +4,16 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { getPegawaiWithUnits, getPegawaiStats, getUnitsForDropdown } from './actions'
+import {
+  getPegawaiWithUnits,
+  getPegawaiStats,
+  getUnitsForDropdown,
+  getEmployeePeriodsAction,
+  lockEmployeePeriodAction,
+  unlockEmployeePeriodAction
+} from './actions'
+import { formatPeriodToMonthName } from '@/lib/utils/format'
+import type { EmployeePeriod } from '@/lib/types/database.types'
 import {
   Plus,
   Search,
@@ -24,7 +33,13 @@ import {
   BarChart3,
   PieChart as PieChartIcon,
   Building2,
-  Filter
+  Filter,
+  Lock,
+  Unlock,
+  Calendar,
+  ArrowRightLeft,
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react'
 import {
   Select,
@@ -35,6 +50,8 @@ import {
 } from "@/components/ui/select"
 import { PegawaiTable } from '@/components/pegawai/PegawaiTable'
 import { PegawaiFormDialog } from '@/components/pegawai/PegawaiFormDialog'
+import { PegawaiRotateDialog } from '@/components/pegawai/PegawaiRotateDialog'
+import { CreatePeriodDialog } from '@/components/pegawai/CreatePeriodDialog'
 import { LoadingSpinner } from '@/components/ui/loading-spinner'
 import type { Pegawai } from '@/lib/types/database.types'
 import { useRouter } from 'next/navigation'
@@ -100,6 +117,20 @@ export default function PegawaiPage() {
   const [importProgress, setImportProgress] = useState(0)
   const [importStatus, setImportStatus] = useState('')
 
+  // Period management state
+  const [periods, setPeriods] = useState<EmployeePeriod[]>([])
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('2026-01')
+  const [periodInfo, setPeriodInfo] = useState<{
+    is_locked: boolean;
+    period_name: string;
+    locked_at?: string | null;
+    locked_by?: string | null;
+  } | null>(null)
+  const [showCreatePeriodDialog, setShowCreatePeriodDialog] = useState(false)
+  const [showRotateDialog, setShowRotateDialog] = useState(false)
+  const [pegawaiToRotate, setPegawaiToRotate] = useState<Pegawai | null>(null)
+  const [lockingPeriod, setLockingPeriod] = useState(false)
+
   // Stats state
   const [stats, setStats] = useState<{
     total: number;
@@ -132,27 +163,46 @@ export default function PegawaiPage() {
   const debouncedSearchTerm = useDebounce(searchTerm, 500)
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
+  // Load available periods
+  const loadPeriods = useCallback(async () => {
+    try {
+      const res = await getEmployeePeriodsAction()
+      if (res.data && res.data.length > 0) {
+        setPeriods(res.data)
+        // If selectedPeriod is not in res.data, select the first one (most recent)
+        if (!res.data.some(p => p.period === selectedPeriod)) {
+          setSelectedPeriod(res.data[0].period)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load periods:', err)
+    }
+  }, [selectedPeriod])
+
   const loadPegawai = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await getPegawaiWithUnits(currentPage, pageSize, debouncedSearchTerm, selectedUnitId)
+      const result = await getPegawaiWithUnits(currentPage, pageSize, debouncedSearchTerm, selectedUnitId, selectedPeriod)
       if (result.error) {
         setError(result.error)
       } else {
         setPegawai(result.data)
         setTotalCount(result.count)
+        if (result.periodInfo) {
+          setPeriodInfo(result.periodInfo)
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Gagal memuat data pegawai')
     } finally {
       setLoading(false)
     }
-  }, [currentPage, pageSize, debouncedSearchTerm, selectedUnitId])
+  }, [currentPage, pageSize, debouncedSearchTerm, selectedUnitId, selectedPeriod])
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true)
     try {
-      const result = await getPegawaiStats(selectedUnitId)
+      const result = await getPegawaiStats(selectedUnitId, selectedPeriod)
       if (!result.error) {
         setStats(result)
       }
@@ -161,7 +211,7 @@ export default function PegawaiPage() {
     } finally {
       setStatsLoading(false)
     }
-  }, [selectedUnitId])
+  }, [selectedUnitId, selectedPeriod])
 
   const loadUnits = useCallback(async () => {
     setUnitsLoading(true)
@@ -176,6 +226,10 @@ export default function PegawaiPage() {
       setUnitsLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    loadPeriods()
+  }, [loadPeriods])
 
   useEffect(() => {
     loadUnits()
@@ -194,7 +248,67 @@ export default function PegawaiPage() {
     setCurrentPage(1)
   }
 
+  // Handle Lock Period Action
+  const handleLockPeriod = async () => {
+    const periodName = periodInfo?.period_name || formatPeriodToMonthName(selectedPeriod)
+    const confirmMsg = `Konfirmasi Penetapan & Penguncian Periode:\n\nApakah Anda yakin ingin MENETAPKAN dan MENGUNCI periode "${periodName}"?\n\nSetelah dikunci:\n1. Rincian seluruh pegawai dan unit kerja pada periode ini akan TERKUNCI secara permanen.\n2. Data ini digunakan sebagai acuan dasar mutlak penilaian KPI (/assessment) dan Laporan Insentif (/reports).\n3. Rotasi/mutasi pada bulan berikutnya tidak akan menggeser periode yang sudah dikunci ini.`
+
+    if (!window.confirm(confirmMsg)) return
+
+    setLockingPeriod(true)
+    try {
+      const res = await lockEmployeePeriodAction(selectedPeriod)
+      if (res.success) {
+        toast.success(`Periode ${periodName} berhasil ditetapkan dan dikunci!`)
+        await loadPeriods()
+        await loadPegawai()
+      } else {
+        toast.error(res.error || 'Gagal mengunci periode')
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Terjadi kesalahan sistem')
+    } finally {
+      setLockingPeriod(false)
+    }
+  }
+
+  // Handle Unlock Period Action
+  const handleUnlockPeriod = async () => {
+    const periodName = periodInfo?.period_name || formatPeriodToMonthName(selectedPeriod)
+    const confirmMsg = `PERINGATAN PEMBUKAAN KUNCI:\n\nApakah Anda yakin ingin MEMBUKA KUNCI periode "${periodName}"?\n\nKunci hanya disarankan dibuka jika terdapat kesalahan input penempatan pegawai mendesak yang perlu diperbaiki.`
+
+    if (!window.confirm(confirmMsg)) return
+
+    setLockingPeriod(true)
+    try {
+      const res = await unlockEmployeePeriodAction(selectedPeriod)
+      if (res.success) {
+        toast.success(`Kunci periode ${periodName} berhasil dibuka kembali.`)
+        await loadPeriods()
+        await loadPegawai()
+      } else {
+        toast.error(res.error || 'Gagal membuka kunci periode')
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Terjadi kesalahan sistem')
+    } finally {
+      setLockingPeriod(false)
+    }
+  }
+
+  // Handle Rotate Click
+  const handleRotateClick = (p: Pegawai) => {
+    setPegawaiToRotate(p)
+    setShowRotateDialog(true)
+  }
+
   const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (periodInfo?.is_locked) {
+      toast.error(`Periode ${periodInfo.period_name || selectedPeriod} telah dikunci. Import data pegawai baru hanya dapat dilakukan pada periode terbuka.`)
+      if (event.target) event.target.value = ''
+      return
+    }
+
     const file = event.target.files?.[0]
     if (!file) return
 
@@ -226,7 +340,6 @@ export default function PegawaiPage() {
       setImportStatus(statusMessages[msgIdx])
     }, 1500)
 
-    // Use AbortController with 5-minute timeout to prevent browser timeout
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000)
 
@@ -248,22 +361,20 @@ export default function PegawaiPage() {
         setImportResult(result)
         if (result.failed > 0) {
           setShowImportResult(true)
-          toast.warning(`Import selesai: ${result.success} berhasil, ${result.failed} gagal.`)
-        } else {
-          toast.success(`Berhasil mengimport ${result.success} data pegawai.`)
         }
+        toast.success(`Import selesai: ${result.success} berhasil, ${result.failed} gagal`)
         loadPegawai()
         loadStats()
       } else {
-        toast.error(result.error || 'Terjadi kesalahan saat import')
+        toast.error(`Gagal import: ${result.error || 'Terjadi kesalahan server'}`)
       }
     } catch (err: any) {
       clearTimeout(timeoutId)
       clearInterval(progressInterval)
       if (err.name === 'AbortError') {
-        toast.error('Import timeout — file terlalu besar atau server terlalu lambat. Coba lagi.')
+        toast.error('Proses import timeout (lebih dari 5 menit). Silakan coba dengan file yang lebih kecil.')
       } else {
-        toast.error('Koneksi gagal saat mencoba import. Periksa koneksi internet.')
+        toast.error(`Terjadi kesalahan sistem: ${err.message}`)
       }
     } finally {
       setTimeout(() => {
@@ -293,10 +404,6 @@ export default function PegawaiPage() {
     window.open('/api/pegawai/template', '_blank')
   }
 
-  const handleDownloadReport = (type: 'excel' | 'pdf') => {
-    toast.info('Generating report...')
-  }
-
   const handleEdit = (p: Pegawai) => {
     setSelectedPegawai(p)
     setShowCreateDialog(true)
@@ -315,8 +422,10 @@ export default function PegawaiPage() {
 
   const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
 
+  const isCurrentPeriodLocked = periodInfo?.is_locked ?? true
+
   return (
-    <div className="p-4 md:p-6 space-y-8">
+    <div className="p-4 md:p-6 space-y-6">
       {/* Import Progress Bar */}
       {importing && (
         <div className="bg-white border border-blue-100 rounded-xl p-4 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
@@ -343,10 +452,10 @@ export default function PegawaiPage() {
 
       {/* Import Result Dialog */}
       <Dialog open={showImportResult} onOpenChange={setShowImportResult}>
-        <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-xl">
-              <AlertCircle className="h-6 w-6 text-amber-500" />
+            <DialogTitle className="flex items-center gap-2 text-indigo-900">
+              <FileSpreadsheet className="h-5 w-5 text-indigo-600" />
               Laporan Hasil Import
             </DialogTitle>
             <DialogDescription>
@@ -422,11 +531,11 @@ export default function PegawaiPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Header */}
+      {/* Main Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight">Master Pegawai</h1>
-          <p className="text-sm text-gray-500 font-medium italic">Data statistik dan manajemen personel terpadu</p>
+          <p className="text-sm text-gray-500 font-medium">Penetapan penempatan pegawai per periode bulan &amp; manajemen personel</p>
         </div>
         <div className="grid grid-cols-2 md:flex md:flex-wrap lg:flex-nowrap gap-2 w-full sm:w-auto">
           <Button
@@ -438,7 +547,13 @@ export default function PegawaiPage() {
           </Button>
 
           <Button
-            onClick={() => document.getElementById('import-pegawai')?.click()}
+            onClick={() => {
+              if (isCurrentPeriodLocked) {
+                toast.warning(`Periode ${periodInfo?.period_name || selectedPeriod} telah dikunci. Buka kunci terlebih dahulu jika ingin mengimport ke periode ini.`)
+                return
+              }
+              document.getElementById('import-pegawai')?.click()
+            }}
             className="bg-amber-600 hover:bg-amber-700 text-white text-xs md:text-sm"
             disabled={importing}
           >
@@ -448,14 +563,122 @@ export default function PegawaiPage() {
           <input id="import-pegawai" type="file" accept=".xlsx,.xls" onChange={handleImport} className="hidden" />
 
           <Button
-            onClick={() => setShowCreateDialog(true)}
-            className="col-span-2 md:col-span-1 text-xs md:text-sm bg-indigo-600 hover:bg-indigo-700"
+            onClick={() => {
+              if (isCurrentPeriodLocked) {
+                toast.warning(`Periode ${periodInfo?.period_name || selectedPeriod} telah dikunci. Pegawai baru hanya dapat ditambahkan pada periode terbuka.`)
+                return
+              }
+              setShowCreateDialog(true)
+            }}
+            className="col-span-2 md:col-span-1 text-xs md:text-sm bg-indigo-600 hover:bg-indigo-700 text-white"
           >
             <Plus className="h-4 w-4 mr-2" />
             Tambah Pegawai
           </Button>
         </div>
       </div>
+
+      {/* PERIOD SELECTION & LOCKING CONTROL CARD */}
+      <Card className="border-2 border-indigo-100 bg-gradient-to-r from-indigo-50/70 via-blue-50/50 to-white shadow-sm overflow-hidden">
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            {/* Left: Period Selector & Status */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-600 text-white rounded-lg shadow-sm">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">Periode Penetapan Pegawai</span>
+                  <div className="w-56 sm:w-64 mt-0.5">
+                    <Select
+                      value={selectedPeriod}
+                      onValueChange={(val) => {
+                        setSelectedPeriod(val)
+                        setCurrentPage(1)
+                      }}
+                    >
+                      <SelectTrigger className="bg-white border-indigo-200 font-semibold text-slate-800 shadow-sm">
+                        <SelectValue placeholder="Pilih Periode" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {periods.map((p) => (
+                          <SelectItem key={p.period} value={p.period}>
+                            <span className="font-semibold">{p.period_name || formatPeriodToMonthName(p.period)}</span>
+                            {p.is_locked ? ' 🔒 (Terkunci)' : ' 🔓 (Draf)'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div className="flex items-center gap-2 pt-4 sm:pt-4">
+                {isCurrentPeriodLocked ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs">
+                    <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                    Ditetapkan &amp; Dikunci
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 shadow-xs">
+                    <Unlock className="w-3.5 h-3.5 text-amber-600" />
+                    Draf / Terbuka (Bisa Mutasi)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Right: Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              {isCurrentPeriodLocked ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleUnlockPeriod}
+                  disabled={lockingPeriod}
+                  className="border-amber-300 text-amber-800 hover:bg-amber-50 text-xs font-medium"
+                  title="Buka kunci untuk melakukan perbaikan darurat"
+                >
+                  {lockingPeriod ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Unlock className="w-3.5 h-3.5 mr-1.5" />}
+                  Buka Kunci Periode
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleLockPeriod}
+                  disabled={lockingPeriod}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs"
+                >
+                  {lockingPeriod ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Lock className="w-3.5 h-3.5 mr-1.5" />}
+                  Tetapkan &amp; Kunci Periode Ini
+                </Button>
+              )}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowCreatePeriodDialog(true)}
+                className="bg-white border-blue-200 text-blue-700 hover:bg-blue-50 text-xs font-semibold shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                Buka Periode Baru (Bulan Berikutnya)
+              </Button>
+            </div>
+          </div>
+
+          {/* Context Explanatory Notice (Only when open) */}
+          {!isCurrentPeriodLocked && (
+            <div className="mt-3 pt-3 border-t border-indigo-100/80 flex items-start gap-2 text-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-slate-600 leading-relaxed">
+                Periode <strong className="text-slate-800">{periodInfo?.period_name || formatPeriodToMonthName(selectedPeriod)}</strong> sedang <strong>terbuka</strong>. Anda dapat melakukan rotasi/mutasi penempatan pegawai antar unit kerja menggunakan tombol <ArrowRightLeft className="w-3.5 h-3.5 inline mx-0.5 text-indigo-600" /> pada daftar pegawai. Setelah selesai disesuaikan, klik <strong>"Tetapkan &amp; Kunci Periode Ini"</strong>.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Filter Section */}
       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col sm:flex-row items-center gap-4">
@@ -506,7 +729,7 @@ export default function PegawaiPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-indigo-600 flex items-center gap-2">
               <Users className="h-4 w-4" />
-              Total Pegawai
+              Total Pegawai ({formatPeriodToMonthName(selectedPeriod)})
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -515,7 +738,7 @@ export default function PegawaiPage() {
             ) : (
               <div className="text-3xl font-bold text-indigo-900">{stats?.total || 0}</div>
             )}
-            <p className="text-xs text-indigo-600 mt-1">Personel aktif saat ini</p>
+            <p className="text-xs text-indigo-600 mt-1">Personel aktif pada periode ini</p>
           </CardContent>
         </Card>
 
@@ -584,112 +807,30 @@ export default function PegawaiPage() {
             ) : (
               <div className="text-3xl font-bold text-rose-900">{stats?.byUnit.length || 0}</div>
             )}
-            <p className="text-xs text-rose-600 mt-1">Sebaran organisasi</p>
+            <p className="text-xs text-rose-600 mt-1">Unit kerja terisi pegawai</p>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Unit Distribution Chart */}
-        <Card className="lg:col-span-2 border-none shadow-sm h-[400px]">
-          <CardHeader>
-            <CardTitle className="text-lg font-bold flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-indigo-600" />
-              Sebaran Pegawai per Unit
-            </CardTitle>
-            <CardDescription>Grafik jumlah personel pada masing-masing unit kerja</CardDescription>
-          </CardHeader>
-          <CardContent className="h-full pb-16">
-            {statsLoading ? (
-              <div className="h-full w-full bg-gray-50 animate-pulse rounded-lg flex items-center justify-center">
-                <LoadingSpinner />
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats?.byUnit.slice(0, 15)} margin={{ top: 20, right: 30, left: 0, bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="name"
-                    angle={-45}
-                    textAnchor="end"
-                    interval={0}
-                    height={80}
-                    tick={{ fontSize: 10, fill: '#64748b' }}
-                  />
-                  <YAxis tick={{ fontSize: 12, fill: '#64748b' }} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {stats?.byUnit.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} fillOpacity={0.8} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Detailed Stats Side Card */}
-        <Card className="border-none shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-lg font-bold flex items-center gap-2">
-              <PieChartIcon className="h-5 w-5 text-emerald-600" />
-              Detail Komposisi
-            </CardTitle>
-            <CardDescription>Rincian berdasarkan golongan & status</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div>
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Berdasarkan Golongan</h4>
-              <div className="space-y-2">
-                {stats?.byGrade.slice(0, 5).map((g, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-700">{g.name}</span>
-                    <div className="flex items-center gap-3">
-                      <div className="h-2 w-24 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-indigo-500"
-                          style={{ width: `${(g.value / (stats?.total || 1)) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-sm font-bold text-gray-900 w-8 text-right">{g.value}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="pt-4 border-t border-gray-100">
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Berdasarkan Status</h4>
-              <div className="space-y-2">
-                {stats?.byStatus.slice(0, 5).map((s, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-700">{s.name}</span>
-                    <div className="flex items-center gap-3">
-                      <div className="h-2 w-24 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500"
-                          style={{ width: `${(s.value / (stats?.total || 1)) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-sm font-bold text-gray-900 w-8 text-right">{s.value}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
+      {/* Main Table Card */}
       <Card className="border-none shadow-sm bg-white/50 backdrop-blur-sm">
         <CardHeader>
-          <CardTitle className="text-lg font-bold">Daftar Pegawai</CardTitle>
-          <CardDescription>
-            Menampilkan {pegawai.length} dari {totalCount} pegawai
-          </CardDescription>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-lg font-bold">
+                Daftar Pegawai &amp; Unit Kerja ({formatPeriodToMonthName(selectedPeriod)})
+              </CardTitle>
+              <CardDescription>
+                Menampilkan {pegawai.length} dari {totalCount} pegawai pada periode {formatPeriodToMonthName(selectedPeriod)}
+              </CardDescription>
+            </div>
+            {isCurrentPeriodLocked && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-md text-xs font-semibold text-slate-700 border">
+                <Lock className="w-3.5 h-3.5 text-slate-500" />
+                Periode Terkunci (Read-Only)
+              </span>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {error && (
@@ -730,6 +871,9 @@ export default function PegawaiPage() {
             loading={loading}
             onEdit={handleEdit}
             onRefresh={loadPegawai}
+            isLocked={isCurrentPeriodLocked}
+            selectedPeriod={selectedPeriod}
+            onRotateUnit={handleRotateClick}
           />
 
           {/* Pagination Controls */}
@@ -749,11 +893,10 @@ export default function PegawaiPage() {
                 <SelectContent>
                   <SelectItem value="50">50 baris</SelectItem>
                   <SelectItem value="100">100 baris</SelectItem>
+                  <SelectItem value="200">200 baris</SelectItem>
+                  <SelectItem value="500">500 baris</SelectItem>
                 </SelectContent>
               </Select>
-              <span className="text-xs text-gray-500">
-                Menampilkan {totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0} - {Math.min(currentPage * pageSize, totalCount)} dari {totalCount} pegawai
-              </span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -761,25 +904,20 @@ export default function PegawaiPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1 || loading}
-                className="h-8 text-xs px-3"
+                disabled={currentPage <= 1 || loading}
+                className="h-8 text-xs"
               >
                 Sebelumnya
               </Button>
-              <div className="flex items-center gap-1 mx-1">
-                <span className="text-xs font-bold text-gray-900 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-100">
-                  {currentPage}
-                </span>
-                <span className="text-xs text-gray-500">
-                  / {totalPages}
-                </span>
-              </div>
+              <span className="text-xs text-gray-600 px-2 font-medium">
+                Halaman {currentPage} dari {totalPages}
+              </span>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage >= totalPages || loading}
-                className="h-8 text-xs px-3"
+                className="h-8 text-xs"
               >
                 Selanjutnya
               </Button>
@@ -788,11 +926,42 @@ export default function PegawaiPage() {
         </CardContent>
       </Card>
 
+      {/* Pegawai Form Dialog */}
       <PegawaiFormDialog
         open={showCreateDialog}
         onClose={handleCloseDialog}
         onSuccess={handleSuccess}
         pegawai={selectedPegawai}
+        selectedPeriod={selectedPeriod}
+      />
+
+      {/* Unit Rotation Dialog */}
+      <PegawaiRotateDialog
+        open={showRotateDialog}
+        onClose={() => {
+          setShowRotateDialog(false)
+          setPegawaiToRotate(null)
+        }}
+        onSuccess={() => {
+          loadPegawai()
+          loadStats()
+        }}
+        pegawai={pegawaiToRotate}
+        period={selectedPeriod}
+        periodName={periodInfo?.period_name || formatPeriodToMonthName(selectedPeriod)}
+        units={units}
+      />
+
+      {/* Create Next Period Dialog */}
+      <CreatePeriodDialog
+        open={showCreatePeriodDialog}
+        onClose={() => setShowCreatePeriodDialog(false)}
+        onSuccess={async (newPeriod) => {
+          await loadPeriods()
+          setSelectedPeriod(newPeriod)
+          setCurrentPage(1)
+        }}
+        existingPeriods={periods}
       />
     </div>
   )

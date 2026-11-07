@@ -1,69 +1,93 @@
 'use client'
 
 import { useState, memo } from 'react'
-import { activatePegawai, deactivatePegawai, deletePegawai } from '@/lib/services/pegawai.service'
+import { activatePegawai, deactivatePegawai, deletePegawai } from '@/app/(authenticated)/pegawai/actions'
 import { Button } from '@/components/ui/button'
-import { Edit, Ban, CheckCircle, Trash2, CheckCircle2 } from 'lucide-react'
+import { Edit, Ban, CheckCircle, Trash2, CheckCircle2, Lock, ArrowRightLeft } from 'lucide-react'
 import type { Pegawai } from '@/lib/types/database.types'
+import { toast } from 'sonner'
 
 interface PegawaiTableProps {
   pegawai: Pegawai[]
   loading: boolean
   onEdit: (pegawai: Pegawai) => void
   onRefresh: () => void
+  isLocked?: boolean
+  selectedPeriod?: string
+  onRotateUnit?: (pegawai: Pegawai) => void
 }
 
-export const PegawaiTable = memo(function PegawaiTable({ pegawai, loading, onEdit, onRefresh }: PegawaiTableProps) {
+export const PegawaiTable = memo(function PegawaiTable({
+  pegawai,
+  loading,
+  onEdit,
+  onRefresh,
+  isLocked = false,
+  selectedPeriod,
+  onRotateUnit
+}: PegawaiTableProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
-  const handleActivate = async (pegawai: Pegawai) => {
-    if (!confirm(`Apakah Anda yakin ingin mengaktifkan kembali ${pegawai.full_name}?`)) {
+  const handleActivate = async (p: Pegawai) => {
+    if (isLocked) {
+      toast.error('Periode ini telah dikunci. Perubahan tidak dapat dilakukan.')
+      return
+    }
+    if (!confirm(`Apakah Anda yakin ingin mengaktifkan kembali ${p.full_name}?`)) {
       return
     }
 
-    setActionLoading(pegawai.id)
-    const result = await activatePegawai(pegawai.id)
+    setActionLoading(p.id)
+    const result = await activatePegawai(p.id, selectedPeriod)
     setActionLoading(null)
 
     if (result.success) {
-      alert('Pegawai berhasil diaktifkan kembali')
+      toast.success('Pegawai berhasil diaktifkan kembali')
       onRefresh()
     } else {
-      alert(`Gagal: ${result.error}`)
+      toast.error(`Gagal: ${result.error}`)
     }
   }
 
-  const handleDeactivate = async (pegawai: Pegawai) => {
-    if (!confirm(`Apakah Anda yakin ingin menonaktifkan ${pegawai.full_name}?`)) {
+  const handleDeactivate = async (p: Pegawai) => {
+    if (isLocked) {
+      toast.error('Periode ini telah dikunci. Perubahan tidak dapat dilakukan.')
+      return
+    }
+    if (!confirm(`Apakah Anda yakin ingin menonaktifkan ${p.full_name}?`)) {
       return
     }
 
-    setActionLoading(pegawai.id)
-    const result = await deactivatePegawai(pegawai.id)
+    setActionLoading(p.id)
+    const result = await deactivatePegawai(p.id, selectedPeriod)
     setActionLoading(null)
 
     if (result.success) {
-      alert('Pegawai berhasil dinonaktifkan')
+      toast.success('Pegawai berhasil dinonaktifkan')
       onRefresh()
     } else {
-      alert(`Gagal: ${result.error}`)
+      toast.error(`Gagal: ${result.error}`)
     }
   }
 
-  const handleDelete = async (pegawai: Pegawai) => {
-    if (!confirm(`PERINGATAN: Apakah Anda yakin ingin menghapus ${pegawai.full_name}?\n\nTindakan ini akan menghapus:\n- Data pegawai\n- Semua data KPI dan realisasi terkait\n\nTindakan ini TIDAK DAPAT DIBATALKAN!`)) {
+  const handleDelete = async (p: Pegawai) => {
+    if (isLocked) {
+      toast.error('Periode ini telah dikunci. Pegawai tidak dapat dihapus.')
+      return
+    }
+    if (!confirm(`PERINGATAN: Apakah Anda yakin ingin menghapus ${p.full_name}?\n\nTindakan ini akan menghapus:\n- Data pegawai\n- Semua data KPI dan realisasi terkait\n\nTindakan ini TIDAK DAPAT DIBATALKAN!`)) {
       return
     }
 
-    setActionLoading(pegawai.id)
-    const result = await deletePegawai(pegawai.id)
+    setActionLoading(p.id)
+    const result = await deletePegawai(p.id, selectedPeriod)
     setActionLoading(null)
 
     if (result.success) {
-      alert('Pegawai berhasil dihapus')
+      toast.success('Pegawai berhasil dihapus')
       onRefresh()
     } else {
-      alert(`Gagal: ${result.error}`)
+      toast.error(`Gagal: ${result.error}`)
     }
   }
 
@@ -109,7 +133,9 @@ export const PegawaiTable = memo(function PegawaiTable({ pegawai, loading, onEdi
                 <div className="text-[10px] text-gray-400 truncate max-w-[150px]">{p.email}</div>
                 <div className="text-xs text-gray-400 md:hidden">{p.position || '-'}</div>
               </td>
-              <td className="p-3 text-xs md:text-sm text-gray-600 hidden md:table-cell">{p.m_units?.name || '-'}</td>
+              <td className="p-3 text-xs md:text-sm text-gray-600 hidden md:table-cell">
+                <span className="font-medium text-slate-800">{p.m_units?.name || '-'}</span>
+              </td>
               <td className="p-3 text-xs md:text-sm text-gray-600 hidden lg:table-cell">{p.position || '-'}</td>
               <td className="p-3 hidden sm:table-cell">
                 <span className={`px-2 py-0.5 text-xs md:text-xs rounded-full font-medium ${p.employment_status === 'PNS' ? 'bg-purple-100 text-purple-800' :
@@ -144,50 +170,70 @@ export const PegawaiTable = memo(function PegawaiTable({ pegawai, loading, onEdi
                 )}
               </td>
               <td className="p-3 text-right">
-                <div className="flex justify-end gap-1 md:gap-2">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                    onClick={() => onEdit(p)}
-                    title="Edit"
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  {p.is_active ? (
+                {isLocked ? (
+                  <div className="flex items-center justify-end gap-1 text-slate-400 text-xs">
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 rounded text-[11px] font-medium text-slate-500">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      Terkunci
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex justify-end gap-1 md:gap-2">
+                    {onRotateUnit && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+                        onClick={() => onRotateUnit(p)}
+                        title="Mutasi / Rotasi Unit Kerja"
+                      >
+                        <ArrowRightLeft className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-                      onClick={() => handleDeactivate(p)}
-                      disabled={actionLoading === p.id}
-                      title="Nonaktifkan"
+                      className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                      onClick={() => onEdit(p)}
+                      title="Edit"
                     >
-                      <Ban className="h-4 w-4" />
+                      <Edit className="h-4 w-4" />
                     </Button>
-                  ) : (
+                    {p.is_active ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                        onClick={() => handleDeactivate(p)}
+                        disabled={actionLoading === p.id}
+                        title="Nonaktifkan"
+                      >
+                        <Ban className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-50"
+                        onClick={() => handleActivate(p)}
+                        disabled={actionLoading === p.id}
+                        title="Aktifkan Kembali"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-50"
-                      onClick={() => handleActivate(p)}
+                      className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => handleDelete(p)}
                       disabled={actionLoading === p.id}
-                      title="Aktifkan Kembali"
+                      title="Hapus"
                     >
-                      <CheckCircle2 className="h-4 w-4" />
+                      <Trash2 className="h-4 w-4" />
                     </Button>
-                  )}
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-                    onClick={() => handleDelete(p)}
-                    disabled={actionLoading === p.id}
-                    title="Hapus"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+                  </div>
+                )}
               </td>
             </tr>
           ))}

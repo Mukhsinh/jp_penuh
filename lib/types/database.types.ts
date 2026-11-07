@@ -194,4 +194,16 @@ export interface CreatePegawaiData {
   is_active?: boolean
 }
 
+export interface EmployeePeriod {
+  id: string
+  period: string
+  period_name: string
+  is_locked: boolean
+  locked_at: string | null
+  locked_by: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type UpdatePegawaiData = Partial<CreatePegawaiData>

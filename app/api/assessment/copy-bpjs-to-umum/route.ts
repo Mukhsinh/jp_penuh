@@ -139,13 +139,27 @@ export async function POST(request: NextRequest) {
 
     const schemaMode = unitData.kpi_schema_mode || 'same'
 
-    // 2. Get active employees in this unit
-    const { data: employees } = await adminClient
-      .from('m_employees')
-      .select('id, full_name')
+    // 2. Get active employees in this unit for the specified period
+    let employees: any[] = []
+    const { data: snapEmps } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('employee_id, full_name')
+      .eq('period', period)
       .eq('unit_id', unit_id)
       .eq('is_active', true)
       .neq('role', 'superadmin')
+
+    if (snapEmps && snapEmps.length > 0) {
+      employees = snapEmps.map(e => ({ id: e.employee_id, full_name: e.full_name }))
+    } else {
+      const { data: mEmps } = await adminClient
+        .from('m_employees')
+        .select('id, full_name')
+        .eq('unit_id', unit_id)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
+      employees = mEmps || []
+    }
 
     if (!employees || employees.length === 0) {
       return NextResponse.json({ error: 'Tidak ada pegawai aktif di unit ini.' }, { status: 400 })

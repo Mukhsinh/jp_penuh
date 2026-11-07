@@ -71,13 +71,34 @@ export async function GET(request: NextRequest) {
         }
 
         if (type === 'employees') {
-            let query = supabase
-                .from('m_employees')
-                .select('id, full_name, unit_id, employee_code, role')
-                .eq('is_active', true)
-                .neq('role', 'superadmin')
-                .order('full_name')
-                .range(0, 9999)
+            const period = searchParams.get('period')
+            let useSnapshot = false
+            if (period) {
+                const { count: snapCount } = await supabase
+                    .from('t_employee_period_snapshots')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('period', period)
+                if (snapCount && snapCount > 0) {
+                    useSnapshot = true
+                }
+            }
+
+            let query = useSnapshot && period
+                ? supabase
+                    .from('t_employee_period_snapshots')
+                    .select('employee_id, full_name, unit_id, employee_code, role')
+                    .eq('period', period)
+                    .eq('is_active', true)
+                    .neq('role', 'superadmin')
+                    .order('full_name')
+                    .range(0, 9999)
+                : supabase
+                    .from('m_employees')
+                    .select('id, full_name, unit_id, employee_code, role')
+                    .eq('is_active', true)
+                    .neq('role', 'superadmin')
+                    .order('full_name')
+                    .range(0, 9999)
 
             if (employee.role === 'unit_manager') {
                 query = query.eq('unit_id', employee.unit_id)
@@ -86,7 +107,13 @@ export async function GET(request: NextRequest) {
             const { data, error } = await query
 
             if (error) throw error
-            return NextResponse.json({ success: true, data })
+
+            const mappedData = (data || []).map((e: any) => ({
+                ...e,
+                id: useSnapshot ? e.employee_id : e.id
+            }))
+
+            return NextResponse.json({ success: true, data: mappedData })
         }
 
         return NextResponse.json({ error: 'Invalid type' }, { status: 400 })

@@ -80,41 +80,51 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Authorization check for unit managers
-    if (currentEmployee.role === 'unit_manager') {
-      const { data: targetEmployee } = await adminClient
+    // Get employee's unit for the selected period (check period snapshot first to respect historical period unit assignments)
+    let employeeUnitId: string | null = null
+
+    if (period) {
+      const { data: snap } = await adminClient
+        .from('t_employee_period_snapshots')
+        .select('unit_id')
+        .eq('period', period)
+        .eq('employee_id', employeeId)
+        .maybeSingle()
+
+      if (snap?.unit_id) {
+        employeeUnitId = snap.unit_id
+      }
+    }
+
+    if (!employeeUnitId) {
+      const { data: employee, error: employeeError } = await adminClient
         .from('m_employees')
         .select('unit_id')
         .eq('id', employeeId)
         .single()
 
-      if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
-        return NextResponse.json(
-          { error: 'You can only view indicators for employees in your unit' },
-          { status: 403 }
-        )
+      if (employeeError || !employee) {
+        console.error('Employee lookup error:', employeeError)
+        return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
       }
+      employeeUnitId = employee.unit_id
     }
 
-    // Get employee's unit
-    const { data: employee, error: employeeError } = await adminClient
-      .from('m_employees')
-      .select('unit_id')
-      .eq('id', employeeId)
-      .single()
-
-    if (employeeError || !employee) {
-      console.error('Employee lookup error:', employeeError)
-      return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
+    // Authorization check for unit managers
+    if (currentEmployee.role === 'unit_manager' && employeeUnitId !== currentEmployee.unit_id) {
+      return NextResponse.json(
+        { error: 'You can only view indicators for employees in your unit' },
+        { status: 403 }
+      )
     }
 
-    console.log('[indicators] employee unit_id:', employee.unit_id)
+    console.log('[indicators] employee unit_id for period', period, ':', employeeUnitId)
 
     // Check unit's KPI schema mode
     const { data: unitData } = await adminClient
       .from('m_units')
       .select('kpi_schema_mode')
-      .eq('id', employee.unit_id)
+      .eq('id', employeeUnitId)
       .single()
 
     const isDifferentKPISchema = unitData?.kpi_schema_mode === 'different'
@@ -129,7 +139,7 @@ export async function GET(request: NextRequest) {
 
     // Filter categories by unit and revenue_type if unit uses different KPI schema
     let categories = (allCategories || []).filter(c => {
-      if (c.unit_id !== employee.unit_id) return false
+      if (c.unit_id !== employeeUnitId) return false
       if (isDifferentKPISchema) {
         return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
       }
@@ -147,7 +157,7 @@ export async function GET(request: NextRequest) {
         success: true,
         indicators: [],
         total_indicators: 0,
-        message: `Tidak ada kategori KPI yang dikonfigurasi untuk unit ini (unit_id: ${employee.unit_id}). Silakan konfigurasi KPI terlebih dahulu di halaman Konfigurasi KPI.`
+        message: `Tidak ada kategori KPI yang dikonfigurasi untuk unit ini (unit_id: ${employeeUnitId}). Silakan konfigurasi KPI terlebih dahulu di halaman Konfigurasi KPI.`
       })
     }
 

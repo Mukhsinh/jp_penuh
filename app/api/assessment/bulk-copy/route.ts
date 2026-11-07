@@ -39,13 +39,27 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Forbidden: Insufficient permissions' }, { status: 403 })
         }
 
-        // 1. Get all employees in this unit
-        const { data: employees } = await adminClient
-            .from('m_employees')
-            .select('id')
+        // 1. Get all employees in this unit for current_period
+        let employees: any[] = []
+        const { data: snapEmps } = await adminClient
+            .from('t_employee_period_snapshots')
+            .select('employee_id')
+            .eq('period', current_period)
             .eq('unit_id', unit_id)
             .eq('is_active', true)
             .neq('role', 'superadmin')
+
+        if (snapEmps && snapEmps.length > 0) {
+            employees = snapEmps.map(e => ({ id: e.employee_id }))
+        } else {
+            const { data: mEmps } = await adminClient
+                .from('m_employees')
+                .select('id')
+                .eq('unit_id', unit_id)
+                .eq('is_active', true)
+                .neq('role', 'superadmin')
+            employees = mEmps || []
+        }
 
         if (!employees || employees.length === 0) {
             return NextResponse.json({ message: 'Tidak ada pegawai aktif ditemukan di unit ini.' })

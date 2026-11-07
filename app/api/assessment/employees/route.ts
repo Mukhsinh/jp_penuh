@@ -119,20 +119,44 @@ export async function GET(request: NextRequest) {
       })
       .map((u: any) => u.id)
 
-    let empQuery = adminClient
-      .from('m_employees')
-      .select(`
-          id,
-          full_name,
-          unit_id,
-          role,
-          m_units!inner (
-            name,
-            code
-          )
-        `)
-      .eq('is_active', true)
-      .neq('role', 'superadmin')
+    // Check if snapshot exists for period
+    const { count: snapCount } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('id', { count: 'exact', head: true })
+      .eq('period', period)
+
+    const useSnapshot = Boolean(snapCount && snapCount > 0)
+
+    let empQuery = useSnapshot
+      ? adminClient
+          .from('t_employee_period_snapshots')
+          .select(`
+              employee_id,
+              full_name,
+              unit_id,
+              role,
+              m_units!inner (
+                name,
+                code
+              )
+            `)
+          .eq('period', period)
+          .eq('is_active', true)
+          .neq('role', 'superadmin')
+      : adminClient
+          .from('m_employees')
+          .select(`
+              id,
+              full_name,
+              unit_id,
+              role,
+              m_units!inner (
+                name,
+                code
+              )
+            `)
+          .eq('is_active', true)
+          .neq('role', 'superadmin')
 
     // Exclude SUPERADMIN unit
     if (adminUnitIds.length > 0) {
@@ -146,7 +170,11 @@ export async function GET(request: NextRequest) {
       empQuery = empQuery.eq('unit_id', requestedUnitId)
     }
 
-    const { data: directEmps, error: directErr } = await empQuery.order('full_name')
+    const { data: rawDirectEmps, error: directErr } = await empQuery.order('full_name')
+    const directEmps = (rawDirectEmps || []).map((e: any) => ({
+      ...e,
+      id: useSnapshot ? e.employee_id : e.id
+    }))
 
     if (!directErr && directEmps) {
       // Step 1: Preload kpi unit schemas and active categories
