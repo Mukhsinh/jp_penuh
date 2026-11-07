@@ -212,7 +212,7 @@ function IncentiveTable({ data }: { data: any[] }) {
                 {formatCurrency(Number(row.total_priority_score) || Number(row.total_activity_rupiah) || Number(row.total_activity) || 0, true, 2)}
               </td>
               <td className="border p-2 text-right text-purple-600 font-mono font-medium">
-                {formatCurrency(Number(row.pir_value) || 0, true, Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 4 : 2)}
+                {formatCurrency(Number(row.pir_value) || 0, true, Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 8 : 2)}
               </td>
               <td className="border p-2 text-right font-mono font-medium text-red-600">
                 {formatCurrency(Number(row.potongan) || 0, true, 2)}
@@ -286,7 +286,7 @@ function UnitComparisonTable({ data }: { data: any[] }) {
             <td className="border p-2 text-right">{formatNumber(row.total_unit_score || 0, 2)}</td>
             <td className="border p-2 text-right text-orange-700">{formatCurrency(row.total_unit_activity || 0)}</td>
             <td className="border p-2 text-right text-purple-600 font-mono">
-              {formatCurrency(Number(row.pir_value) || 0, true, Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 4 : 2)}
+              {formatCurrency(Number(row.pir_value) || 0, true, Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 8 : 2)}
             </td>
             <td className="border p-2 text-right font-bold text-green-700">{formatCurrency(row.total_incentive || 0)}</td>
             <td className="border p-2 text-right">{safeRender(row.employee_count)}</td>

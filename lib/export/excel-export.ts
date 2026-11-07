@@ -52,7 +52,7 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
           Number(Number(row.p3_score || 0).toFixed(2)),
           Number(Number(row.total_score || 0).toFixed(2)),
           Number(Number(row.total_priority_score || row.total_activity_rupiah || row.total_activity || 0).toFixed(2)),
-          Number(Number(row.pir_value || 0).toFixed(Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 4 : 2)),
+          Number(Number(row.pir_value || 0).toFixed(Number(row.pir_value || 0) > 0 && Number(row.pir_value || 0) < 100 ? 8 : 2)),
           Number(Number(row.potongan || 0).toFixed(2)),
           Number(Number(row.distribusi_potongan || 0).toFixed(2)),
           Number(Number(row.gross_incentive || 0).toFixed(2)),

@@ -1431,7 +1431,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const isMedical = isMedicalUnit(uId, unitName)
 
     // Formula: (Total Indeks x PIR) + Insentif Berbasis Prioritas + Distribusi Potongan Unit - Potongan
-    const indexIncentive = totalScore * pir
+    const indexIncentive = Number((totalScore * pir).toFixed(2))
     const positiveActivity = Number(totalActivityRupiah)
     const deductionAmount = Number(totalDeductionRupiah || 0)
 
