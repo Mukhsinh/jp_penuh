@@ -10,6 +10,8 @@ import {
   lockEmployeePeriod,
   unlockEmployeePeriod,
   createNextEmployeePeriod,
+  clearDraftEmployeePeriod,
+  getNextEmployeeCode,
   rotateEmployeeUnit,
   ensureDefaultPeriodEstablished
 } from '@/lib/services/employee-period.service'
@@ -67,6 +69,46 @@ export async function unlockEmployeePeriodAction(period: string): Promise<{ succ
     return result
   } catch (err: any) {
     return { success: false, error: err.message || 'Gagal membuka kunci periode' }
+  }
+}
+
+/**
+ * Server action to get the next auto-generated employee code
+ */
+export async function getNextEmployeeCodeAction(): Promise<{ code: string; error?: string }> {
+  try {
+    const code = await getNextEmployeeCode()
+    return { code }
+  } catch (err: any) {
+    console.error('getNextEmployeeCodeAction error:', err)
+    return { code: 'PEG001', error: err.message }
+  }
+}
+
+/**
+ * Server action to clear data and delete a draft period
+ */
+export async function clearDraftEmployeePeriodAction(
+  period: string
+): Promise<{ success: boolean; nextPeriod?: string; nextPeriodInfo?: any; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Tidak terautentikasi' }
+
+    const isSuperAdmin = checkSuperAdmin(user as any)
+    if (!isSuperAdmin) return { success: false, error: 'Hanya Superadmin yang memiliki akses untuk mereset periode' }
+
+    const result = await clearDraftEmployeePeriod(period)
+    if (result.success) {
+      revalidatePath('/pegawai')
+      revalidatePath('/units')
+      revalidatePath('/assessment')
+      revalidatePath('/reports')
+    }
+    return result
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Gagal mereset data periode' }
   }
 }
 
@@ -178,15 +220,16 @@ export async function getPegawaiWithUnits(
           locked_at: periodRow.locked_at,
           locked_by: periodRow.locked_by
         }
-      }
-
-      const { count: snapCount } = await fetchClient
-        .from('t_employee_period_snapshots')
-        .select('id', { count: 'exact', head: true })
-        .eq('period', period)
-
-      if (snapCount && snapCount > 0) {
         useSnapshot = true
+      } else {
+        const { count: snapCount } = await fetchClient
+          .from('t_employee_period_snapshots')
+          .select('id', { count: 'exact', head: true })
+          .eq('period', period)
+
+        if (snapCount && snapCount > 0) {
+          useSnapshot = true
+        }
       }
     }
 
@@ -751,13 +794,23 @@ export async function getPegawaiStats(unitId?: string, period?: string): Promise
 
     let useSnapshot = false
     if (period) {
-      const { count } = await adminSupabase
-        .from('t_employee_period_snapshots')
-        .select('id', { count: 'exact', head: true })
+      const { data: periodRow } = await adminSupabase
+        .from('t_employee_periods')
+        .select('id')
         .eq('period', period)
+        .maybeSingle()
 
-      if (count && count > 0) {
+      if (periodRow) {
         useSnapshot = true
+      } else {
+        const { count } = await adminSupabase
+          .from('t_employee_period_snapshots')
+          .select('id', { count: 'exact', head: true })
+          .eq('period', period)
+
+        if (count && count > 0) {
+          useSnapshot = true
+        }
       }
     }
 

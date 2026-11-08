@@ -242,6 +242,96 @@ export async function unlockEmployeePeriod(period: string): Promise<{ success: b
 }
 
 /**
+ * Clear data and delete a draft employee period
+ * Only allowed for periods with is_locked = false (never locked baseline)
+ */
+export async function clearDraftEmployeePeriod(
+  period: string
+): Promise<{ success: boolean; nextPeriod?: string; nextPeriodInfo?: any; error?: string }> {
+  try {
+    const adminClient = await createAdminClient()
+
+    // 1. Verify period exists and is NOT locked
+    const { data: periodRow } = await adminClient
+      .from('t_employee_periods')
+      .select('*')
+      .eq('period', period)
+      .maybeSingle()
+
+    if (!periodRow) {
+      return { success: false, error: 'Periode tidak ditemukan' }
+    }
+
+    if (periodRow.is_locked) {
+      return {
+        success: false,
+        error: `Periode ${periodRow.period_name || period} telah dikunci. Reset data hanya dapat dilakukan pada periode berstatus draf.`
+      }
+    }
+
+    // 2. Delete all employee snapshots for this draft period
+    const { error: delSnapErr } = await adminClient
+      .from('t_employee_period_snapshots')
+      .delete()
+      .eq('period', period)
+
+    if (delSnapErr) throw delSnapErr
+
+    // 3. Delete the period from t_employee_periods
+    const { error: delPeriodErr } = await adminClient
+      .from('t_employee_periods')
+      .delete()
+      .eq('period', period)
+
+    if (delPeriodErr) throw delPeriodErr
+
+    // 4. Also clean up draft unit period snapshots and unit period if draft
+    const { data: unitPeriodRow } = await adminClient
+      .from('t_unit_periods')
+      .select('is_locked')
+      .eq('period', period)
+      .maybeSingle()
+
+    if (unitPeriodRow && !unitPeriodRow.is_locked) {
+      await adminClient
+        .from('t_unit_period_snapshots')
+        .delete()
+        .eq('period', period)
+
+      await adminClient
+        .from('t_unit_periods')
+        .delete()
+        .eq('period', period)
+    }
+
+    // 5. Find the latest remaining period to switch to (e.g., 2026-01)
+    const { data: remainingPeriods } = await adminClient
+      .from('t_employee_periods')
+      .select('*')
+      .order('period', { ascending: false })
+      .limit(1)
+
+    const nextPeriodRow = remainingPeriods?.[0]
+    const nextPeriod = nextPeriodRow?.period || '2026-01'
+
+    return {
+      success: true,
+      nextPeriod,
+      nextPeriodInfo: nextPeriodRow ? {
+        period: nextPeriodRow.period,
+        is_locked: Boolean(nextPeriodRow.is_locked),
+        period_name: nextPeriodRow.period_name || formatPeriodToMonthName(nextPeriodRow.period),
+        locked_at: nextPeriodRow.locked_at,
+        locked_by: nextPeriodRow.locked_by
+      } : undefined
+    }
+  } catch (err: any) {
+    console.error('clearDraftEmployeePeriod error:', err)
+    return { success: false, error: err.message || 'Gagal mereset data periode draf' }
+  }
+}
+
+/**
  * Create a new period (e.g., February 2026), copying active employees and assignments from sourcePeriod or latest period
  */
 export async function createNextEmployeePeriod(
@@ -426,6 +516,53 @@ export async function rotateEmployeeUnit(
   } catch (err: any) {
     console.error('rotateEmployeeUnit error:', err)
     return { success: false, error: err.message || 'Gagal memindahkan pegawai' }
+  }
+}
+
+/**
+ * Calculate the next available employee code based on the highest existing numeric code
+ * Example: PEG567 -> PEG568, PEG578 -> PEG579
+ */
+export async function getNextEmployeeCode(): Promise<string> {
+  try {
+    const adminClient = await createAdminClient()
+
+    // 1. Fetch all employee codes from m_employees
+    const { data: emps } = await adminClient
+      .from('m_employees')
+      .select('employee_code')
+      .neq('role', 'superadmin')
+
+    // 2. Also fetch codes from t_employee_period_snapshots
+    const { data: snaps } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('employee_code')
+      .neq('role', 'superadmin')
+
+    let maxNum = 0
+    let prefix = 'PEG'
+
+    const allRecords = [...(emps || []), ...(snaps || [])]
+
+    for (const item of allRecords) {
+      const codeStr = String(item.employee_code || '').trim()
+      const match = codeStr.match(/^([a-zA-Z]+)(\d+)$/)
+      if (match) {
+        const p = match[1].toUpperCase()
+        const num = parseInt(match[2], 10)
+        if (num > maxNum) {
+          maxNum = num
+          prefix = p
+        }
+      }
+    }
+
+    const nextNum = maxNum + 1
+    const formattedNum = nextNum < 1000 ? String(nextNum).padStart(3, '0') : String(nextNum)
+    return `${prefix}${formattedNum}`
+  } catch (error) {
+    console.error('Error generating next employee code:', error)
+    return 'PEG001'
   }
 }
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,6 +41,14 @@ export function CreatePeriodDialog({
   const [period, setPeriod] = useState<string>(computeNextPeriod(latestPeriod))
   const [sourcePeriod, setSourcePeriod] = useState<string>(latestPeriod)
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      const nextP = computeNextPeriod(latestPeriod)
+      setPeriod(nextP)
+      setSourcePeriod(latestPeriod)
+    }
+  }, [open, latestPeriod])
 
   const handleCreate = async () => {
     if (!period || !period.includes('-')) {

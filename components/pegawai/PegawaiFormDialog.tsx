@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createPegawai, updatePegawai } from '@/app/(authenticated)/pegawai/actions'
+import { createPegawai, updatePegawai, getNextEmployeeCodeAction } from '@/app/(authenticated)/pegawai/actions'
 import { createClient } from '@/lib/supabase/client'
 import { Loader2 } from 'lucide-react'
 import {
@@ -32,6 +32,7 @@ interface Unit {
 
 export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai, selectedPeriod }: PegawaiFormDialogProps) {
   const [loading, setLoading] = useState(false)
+  const [fetchingCode, setFetchingCode] = useState(false)
   const [units, setUnits] = useState<Unit[]>([])
   const [formData, setFormData] = useState({
     employee_code: '',
@@ -106,6 +107,33 @@ export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai, selectedP
     }
   }, [pegawai, open])
 
+  // Automatically fetch next employee code when adding new employee
+  useEffect(() => {
+    if (open && !pegawai) {
+      let isMounted = true
+      setFetchingCode(true)
+      getNextEmployeeCodeAction()
+        .then(res => {
+          if (isMounted && res.code) {
+            setFormData(prev => ({
+              ...prev,
+              employee_code: res.code
+            }))
+          }
+        })
+        .catch(err => {
+          console.error('Failed to get next employee code:', err)
+        })
+        .finally(() => {
+          if (isMounted) setFetchingCode(false)
+        })
+
+      return () => {
+        isMounted = false
+      }
+    }
+  }, [open, pegawai])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -149,15 +177,27 @@ export function PegawaiFormDialog({ open, onClose, onSuccess, pegawai, selectedP
         <form onSubmit={handleSubmit} className="p-6 pt-2 pb-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="employee_code">Kode Pegawai *</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="employee_code">Kode Pegawai *</Label>
+                {!pegawai && fetchingCode && (
+                  <span className="text-[11px] text-blue-600 flex items-center gap-1 font-medium">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Mengambil kode otomatis...
+                  </span>
+                )}
+                {!pegawai && !fetchingCode && formData.employee_code && (
+                  <span className="text-[11px] text-emerald-600 font-semibold">
+                    ✓ Otomatis terisi (+1 dari terakhir)
+                  </span>
+                )}
+              </div>
               <Input
                 id="employee_code"
                 value={formData.employee_code}
-                onChange={(e) => setFormData({ ...formData, employee_code: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, employee_code: e.target.value.toUpperCase() })}
                 placeholder="Contoh: PEG001"
                 disabled={loading || !!pegawai}
                 required
-                className="bg-gray-50/50"
+                className="bg-gray-50/50 font-mono font-semibold"
               />
             </div>
 

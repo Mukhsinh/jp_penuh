@@ -10,7 +10,8 @@ import {
   getUnitsForDropdown,
   getEmployeePeriodsAction,
   lockEmployeePeriodAction,
-  unlockEmployeePeriodAction
+  unlockEmployeePeriodAction,
+  clearDraftEmployeePeriodAction
 } from './actions'
 import { formatPeriodToMonthName } from '@/lib/utils/format'
 import type { EmployeePeriod } from '@/lib/types/database.types'
@@ -36,6 +37,7 @@ import {
   Filter,
   Lock,
   Unlock,
+  RotateCcw,
   Calendar,
   ArrowRightLeft,
   ShieldCheck,
@@ -130,6 +132,7 @@ export default function PegawaiPage() {
   const [showRotateDialog, setShowRotateDialog] = useState(false)
   const [pegawaiToRotate, setPegawaiToRotate] = useState<Pegawai | null>(null)
   const [lockingPeriod, setLockingPeriod] = useState(false)
+  const [resettingPeriod, setResettingPeriod] = useState(false)
 
   // Stats state
   const [stats, setStats] = useState<{
@@ -179,10 +182,11 @@ export default function PegawaiPage() {
     }
   }, [selectedPeriod])
 
-  const loadPegawai = useCallback(async () => {
+  const loadPegawai = useCallback(async (overridePeriod?: string) => {
+    const periodToUse = overridePeriod !== undefined ? overridePeriod : selectedPeriod
     setLoading(true)
     try {
-      const result = await getPegawaiWithUnits(currentPage, pageSize, debouncedSearchTerm, selectedUnitId, selectedPeriod)
+      const result = await getPegawaiWithUnits(currentPage, pageSize, debouncedSearchTerm, selectedUnitId, periodToUse)
       if (result.error) {
         setError(result.error)
       } else {
@@ -199,10 +203,11 @@ export default function PegawaiPage() {
     }
   }, [currentPage, pageSize, debouncedSearchTerm, selectedUnitId, selectedPeriod])
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (overridePeriod?: string) => {
+    const periodToUse = overridePeriod !== undefined ? overridePeriod : selectedPeriod
     setStatsLoading(true)
     try {
-      const result = await getPegawaiStats(selectedUnitId, selectedPeriod)
+      const result = await getPegawaiStats(selectedUnitId, periodToUse)
       if (!result.error) {
         setStats(result)
       }
@@ -293,6 +298,43 @@ export default function PegawaiPage() {
       toast.error(err.message || 'Terjadi kesalahan sistem')
     } finally {
       setLockingPeriod(false)
+    }
+  }
+
+  // Handle Reset / Clear Data Draft Period
+  const handleResetDraftPeriod = async () => {
+    if (isCurrentPeriodLocked) {
+      toast.warning('Periode ini telah dikunci. Reset data hanya dapat dilakukan pada periode berstatus draf.')
+      return
+    }
+
+    const periodName = periodInfo?.period_name || formatPeriodToMonthName(selectedPeriod)
+    const confirmed = window.confirm(
+      `PERINGATAN CLEAR DATA / RESET PERIODE:\n\nApakah Anda yakin ingin menghapus seluruh data pegawai dan membatalkan periode "${periodName}"?\n\nPeriode ini akan dikosongkan dan kembali ke status "belum dibuat". Anda dapat membukanya kembali nanti dengan menyalin data dari periode sebelumnya yang telah terkunci.\n\nTindakan ini tidak dapat dibatalkan!`
+    )
+    if (!confirmed) return
+
+    setResettingPeriod(true)
+    try {
+      const res = await clearDraftEmployeePeriodAction(selectedPeriod)
+      if (res.success) {
+        const target = res.nextPeriod || '2026-01'
+        if (res.nextPeriodInfo) {
+          setPeriodInfo(res.nextPeriodInfo)
+        }
+        setSelectedPeriod(target)
+        setCurrentPage(1)
+        await loadPeriods()
+        await loadPegawai(target)
+        await loadStats(target)
+        toast.success(`Berhasil! Data pegawai dan periode ${periodName} telah dibersihkan. Periode sebelumnya tetap tersimpan dan terkunci aman.`)
+      } else {
+        toast.error(res.error || 'Gagal mereset data periode')
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Terjadi kesalahan sistem')
+    } finally {
+      setResettingPeriod(false)
     }
   }
 
@@ -645,15 +687,33 @@ export default function PegawaiPage() {
                   Buka Kunci Periode
                 </Button>
               ) : (
-                <Button
-                  size="sm"
-                  onClick={handleLockPeriod}
-                  disabled={lockingPeriod}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs"
-                >
-                  {lockingPeriod ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Lock className="w-3.5 h-3.5 mr-1.5" />}
-                  Tetapkan &amp; Kunci Periode Ini
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    onClick={handleLockPeriod}
+                    disabled={lockingPeriod || resettingPeriod}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs"
+                  >
+                    {lockingPeriod ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <Lock className="w-3.5 h-3.5 mr-1.5" />}
+                    Tetapkan &amp; Kunci Periode Ini
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleResetDraftPeriod}
+                    disabled={lockingPeriod || resettingPeriod}
+                    className="border-rose-300 bg-rose-50/70 text-rose-700 hover:bg-rose-100 hover:text-rose-800 text-xs font-semibold shadow-xs transition-colors"
+                    title="Hapus seluruh data pegawai dan batalkan periode draf ini agar kembali menjadi belum dibuat"
+                  >
+                    {resettingPeriod ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5 text-rose-600" />
+                    ) : (
+                      <RotateCcw className="w-3.5 h-3.5 mr-1.5 text-rose-600" />
+                    )}
+                    Clear Data
+                  </Button>
+                </>
               )}
 
               <Button
