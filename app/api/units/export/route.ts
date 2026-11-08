@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { getUnitsByPeriod } from '@/lib/services/unit-period.service'
 import * as XLSX from 'xlsx'
 
 export async function GET(request: NextRequest) {
@@ -15,36 +16,49 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams
     const format = searchParams.get('format') || 'excel'
+    const period = searchParams.get('period')
 
-    // Get all units with employee count
-    const { data: rawUnits, error } = await adminClient
-      .from('m_units')
-      .select('*')
-      .order('code', { ascending: true })
+    let unitsWithCounts: any[] = []
+    let periodTitle = ''
 
-    if (error) throw error
+    if (period) {
+      const periodRes = await getUnitsByPeriod(period)
+      unitsWithCounts = (periodRes.data || []).map((u: any) => ({
+        ...u,
+        employee_count: u.employee_count !== undefined ? u.employee_count : (u.employees?.[0]?.count || 0)
+      }))
+      periodTitle = ` - Periode ${periodRes.periodInfo.period_name || period}`
+    } else {
+      // Get all units with employee count
+      const { data: rawUnits, error } = await adminClient
+        .from('m_units')
+        .select('*')
+        .order('code', { ascending: true })
 
-    const units = (rawUnits || []).filter((u: any) => {
-      const code = String(u.code || '').toUpperCase()
-      const name = String(u.name || '').toUpperCase()
-      return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
-    })
+      if (error) throw error
 
-    // Get employee counts
-    const unitsWithCounts = await Promise.all(
-      (units || []).map(async (unit: any) => {
-        const { count } = await adminClient
-          .from('m_employees')
-          .select('*', { count: 'exact', head: true })
-          .eq('unit_id', unit.id)
-          .neq('role', 'superadmin')
-
-        return {
-          ...unit,
-          employee_count: count || 0
-        }
+      const units = (rawUnits || []).filter((u: any) => {
+        const code = String(u.code || '').toUpperCase()
+        const name = String(u.name || '').toUpperCase()
+        return code !== 'ADMIN' && code !== 'SUPERADMIN' && !name.includes('SUPERADMIN')
       })
-    )
+
+      // Get employee counts
+      unitsWithCounts = await Promise.all(
+        (units || []).map(async (unit: any) => {
+          const { count } = await adminClient
+            .from('m_employees')
+            .select('*', { count: 'exact', head: true })
+            .eq('unit_id', unit.id)
+            .neq('role', 'superadmin')
+
+          return {
+            ...unit,
+            employee_count: count || 0
+          }
+        })
+      )
+    }
 
     // Calculate Totals
     const totalProportion = unitsWithCounts.reduce((sum, unit) => sum + (Number(unit.proportion_percentage) || 0), 0)
@@ -76,47 +90,65 @@ export async function GET(request: NextRequest) {
       // Judul Laporan
       doc.setFontSize(14)
       doc.setFont('helvetica', 'bold')
-      doc.text('DAFTAR UNIT KERJA', 105, 50, { align: 'center' })
+      doc.text(`DAFTAR UNIT KERJA${periodTitle.toUpperCase()}`, 105, 50, { align: 'center' })
       doc.setFontSize(10)
-      doc.text(`Periode: ${new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`, 105, 56, { align: 'center' })
+      doc.setFont('helvetica', 'normal')
+      doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, 105, 56, { align: 'center' })
 
-      // Tabel
+      // Prepare Table Data
       const tableData = unitsWithCounts.map((unit: any, index: number) => [
         index + 1,
         unit.code,
         unit.name,
-        unit.proportion_percentage.toFixed(2) + '%',
+        (Number(unit.proportion_percentage) || 0).toFixed(2) + '%',
+        unit.use_same_proportion !== false ? `${(Number(unit.proportion_percentage) || 0).toFixed(2)}%` : `${(Number(unit.proportion_umum_percentage ?? unit.proportion_percentage) || 0).toFixed(2)}%`,
         unit.employee_count,
         unit.is_active ? 'Aktif' : 'Nonaktif'
       ])
 
+      // Add Total Row
+      tableData.push([
+        '',
+        '',
+        'TOTAL',
+        totalProportion.toFixed(2) + '%',
+        '-',
+        totalEmployees,
+        ''
+      ])
+
       autoTable(doc, {
-        startY: 65,
-        head: [['No', 'Kode', 'Nama Unit', 'Proporsi', 'Pegawai', 'Status']],
+        head: [['No', 'Kode', 'Nama Unit', 'Proporsi BPJS', 'Proporsi UMUM', 'Pegawai', 'Status']],
         body: tableData,
-        foot: [[
-          '',
-          '',
-          { content: 'TOTAL', styles: { halign: 'right', fontStyle: 'bold' } },
-          { content: totalProportion.toFixed(2) + '%', styles: { fontStyle: 'bold' } },
-          { content: totalEmployees.toString(), styles: { fontStyle: 'bold' } },
-          ''
-        ]],
+        startY: 65,
         theme: 'striped',
-        headStyles: { fillColor: [41, 128, 185], textColor: 255 },
-        footStyles: { fillColor: [240, 240, 240], textColor: 0 },
-        styles: { fontSize: 9 },
+        headStyles: {
+          fillColor: [37, 99, 235],
+          textColor: 255,
+          fontStyle: 'bold',
+          halign: 'center'
+        },
         columnStyles: {
-          0: { cellWidth: 10 },
-          1: { cellWidth: 20 },
-          3: { cellWidth: 25 },
-          4: { cellWidth: 20 },
-          5: { cellWidth: 20 }
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 20, halign: 'center' },
+          2: { cellWidth: 50 },
+          3: { cellWidth: 28, halign: 'right' },
+          4: { cellWidth: 28, halign: 'right' },
+          5: { cellWidth: 22, halign: 'center' },
+          6: { cellWidth: 20, halign: 'center' }
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252]
+        },
+        didParseCell: function(data) {
+          if (data.row.index === tableData.length - 1) {
+            data.cell.styles.fontStyle = 'bold'
+            data.cell.styles.fillColor = [241, 245, 249]
+          }
         }
       })
 
-      // Footer with signature
-      const finalY = (doc as any).lastAutoTable.finalY || 70
+      const finalY = (doc as any).lastAutoTable.finalY || 150
       doc.setFontSize(10)
       doc.setFont('helvetica', 'normal')
       doc.text(`Sungai Bahar, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`, 140, finalY + 20)
@@ -131,7 +163,7 @@ export async function GET(request: NextRequest) {
       return new NextResponse(pdfOutput, {
         headers: {
           'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="Laporan_Unit_${new Date().toISOString().split('T')[0]}.pdf"`
+          'Content-Disposition': `attachment; filename="Laporan_Unit_${period || 'Master'}_${new Date().toISOString().split('T')[0]}.pdf"`
         }
       })
     } else {
@@ -140,7 +172,8 @@ export async function GET(request: NextRequest) {
         'No': index + 1,
         'Kode Unit': unit.code,
         'Nama Unit': unit.name,
-        'Proporsi (%)': unit.proportion_percentage.toFixed(2),
+        'Proporsi BPJS (%)': (Number(unit.proportion_percentage) || 0).toFixed(2),
+        'Proporsi UMUM (%)': (unit.use_same_proportion !== false ? Number(unit.proportion_percentage) || 0 : Number(unit.proportion_umum_percentage ?? unit.proportion_percentage) || 0).toFixed(2),
         'Jumlah Pegawai': unit.employee_count,
         'Status': unit.is_active ? 'Aktif' : 'Nonaktif'
       }))
@@ -150,18 +183,18 @@ export async function GET(request: NextRequest) {
         'No': null as any,
         'Kode Unit': '',
         'Nama Unit': 'TOTAL',
-        'Proporsi (%)': totalProportion.toFixed(2),
+        'Proporsi BPJS (%)': totalProportion.toFixed(2),
+        'Proporsi UMUM (%)': '-',
         'Jumlah Pegawai': totalEmployees as any,
         'Status': ''
       })
 
       const wb = XLSX.utils.book_new()
 
-      // Header for Excel
       const header = [
         ['RUMAH SAKIT SUNGAI BAHAR'],
         ['Kabupaten Muaro Jambi, Provinsi Jambi'],
-        ['DAFTAR UNIT KERJA'],
+        [`DAFTAR UNIT KERJA${periodTitle.toUpperCase()}`],
         [`Tanggal Cetak: ${new Date().toLocaleString('id-ID')}`],
         []
       ]
@@ -169,12 +202,12 @@ export async function GET(request: NextRequest) {
       const ws = XLSX.utils.aoa_to_sheet(header)
       XLSX.utils.sheet_add_json(ws, excelData, { origin: 'A6' })
 
-      // Set column widths
       ws['!cols'] = [
         { wch: 5 },
         { wch: 15 },
         { wch: 30 },
-        { wch: 15 },
+        { wch: 18 },
+        { wch: 18 },
         { wch: 15 },
         { wch: 15 }
       ]
@@ -186,14 +219,14 @@ export async function GET(request: NextRequest) {
       return new NextResponse(buf, {
         headers: {
           'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'Content-Disposition': `attachment; filename="Laporan_Unit_${new Date().toISOString().split('T')[0]}.xlsx"`
+          'Content-Disposition': `attachment; filename="Laporan_Unit_${period || 'Master'}_${new Date().toISOString().split('T')[0]}.xlsx"`
         }
       })
     }
   } catch (error: any) {
-    console.error('Error exporting units:', error)
+    console.error('Error generating unit report:', error)
     return NextResponse.json(
-      { error: error.message || 'Failed to export units' },
+      { error: error.message || 'Failed to generate report' },
       { status: 500 }
     )
   }

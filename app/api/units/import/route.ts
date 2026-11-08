@@ -26,9 +26,26 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData()
     const file = formData.get('file') as File
+    const period = formData.get('period') as string | null
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    }
+
+    // Check if period is locked
+    if (period) {
+      const { data: periodRow } = await supabaseAdmin
+        .from('t_unit_periods')
+        .select('is_locked, period_name')
+        .eq('period', period)
+        .maybeSingle()
+
+      if (periodRow?.is_locked) {
+        return NextResponse.json(
+          { error: `Periode ${periodRow.period_name || period} telah dikunci. Import porsi unit tidak diperbolehkan pada periode terkunci.` },
+          { status: 400 }
+        )
+      }
     }
 
     // Read Excel file robustly
@@ -40,14 +57,12 @@ export async function POST(request: NextRequest) {
     }
 
     const rawData = XLSX.utils.sheet_to_json(worksheet) as Record<string, any>[]
-    console.log(`[IMPORT] Received ${rawData.length} rows from Excel`)
+    console.log(`[IMPORT] Received ${rawData.length} rows from Excel for period: ${period || 'master'}`)
 
     // Flexible Header Mapping
     const getVal = (row: Record<string, any>, possibleKeys: string[]) => {
       for (const key of possibleKeys) {
-        // Try exact match
         if (row[key] !== undefined) return row[key]
-        // Try trimmed match
         const foundKey = Object.keys(row).find(k => k.trim().toLowerCase() === key.toLowerCase())
         if (foundKey) return row[foundKey]
       }
@@ -58,6 +73,20 @@ export async function POST(request: NextRequest) {
       success: 0,
       failed: 0,
       errors: [] as string[]
+    }
+
+    // Check if we should sync to master m_units
+    let shouldSyncMaster = true
+    if (period) {
+      const { data: laterPeriods } = await supabaseAdmin
+        .from('t_unit_periods')
+        .select('period')
+        .gt('period', period)
+        .limit(1)
+
+      if (laterPeriods && laterPeriods.length > 0) {
+        shouldSyncMaster = false
+      }
     }
 
     // Process each row
@@ -84,34 +113,62 @@ export async function POST(request: NextRequest) {
         // Check if unit exists by code
         const { data: existing, error: checkError } = await supabaseAdmin
           .from('m_units')
-          .select('id')
+          .select('*')
           .eq('code', code)
           .maybeSingle()
 
         if (checkError) throw checkError
 
-        const unitData = {
-          code,
-          name,
-          proportion_percentage: validProportion,
-          is_active: statusStr ? (statusStr === 'aktif' || statusStr === 'active' || statusStr === '1' || statusStr === 'true') : true,
-          updated_at: new Date().toISOString()
-        }
+        let unitId = existing?.id
 
         if (existing) {
-          const { error: updateError } = await supabaseAdmin
-            .from('m_units')
-            .update(unitData)
-            .eq('id', existing.id)
-          if (updateError) throw updateError
+          if (shouldSyncMaster) {
+            const { error: updateError } = await supabaseAdmin
+              .from('m_units')
+              .update({
+                name,
+                proportion_percentage: validProportion,
+                is_active: statusStr ? (statusStr === 'aktif' || statusStr === 'active' || statusStr === '1' || statusStr === 'true') : existing.is_active,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', existing.id)
+            if (updateError) throw updateError
+          }
         } else {
-          const { error: insertError } = await supabaseAdmin
+          const { data: inserted, error: insertError } = await supabaseAdmin
             .from('m_units')
             .insert({
-              ...unitData,
+              code,
+              name,
+              proportion_percentage: validProportion,
+              proportion_umum_percentage: validProportion,
+              use_same_proportion: true,
+              is_active: statusStr ? (statusStr === 'aktif' || statusStr === 'active' || statusStr === '1' || statusStr === 'true') : true,
               created_at: new Date().toISOString()
             })
+            .select()
+            .single()
           if (insertError) throw insertError
+          unitId = inserted?.id
+        }
+
+        // If period is specified, upsert into period snapshot
+        if (period && unitId) {
+          const { error: snapError } = await supabaseAdmin
+            .from('t_unit_period_snapshots')
+            .upsert({
+              period,
+              unit_id: unitId,
+              code,
+              name,
+              proportion_percentage: validProportion,
+              proportion_umum_percentage: validProportion,
+              use_same_proportion: true,
+              is_active: statusStr ? (statusStr === 'aktif' || statusStr === 'active' || statusStr === '1' || statusStr === 'true') : true,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'period,unit_id' })
+
+          if (snapError) throw snapError
         }
 
         results.success++

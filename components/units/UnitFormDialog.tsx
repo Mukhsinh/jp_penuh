@@ -6,7 +6,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
+import { updateUnitProportionAction } from '@/app/(authenticated)/units/actions'
 import { useRouter } from 'next/navigation'
+import { Lock } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface Unit {
   id: string
@@ -22,9 +25,21 @@ interface UnitFormDialogProps {
   unit: Unit | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  period?: string
+  isLocked?: boolean
+  periodName?: string
+  onSuccess?: () => void
 }
 
-export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps) {
+export function UnitFormDialog({
+  unit,
+  open,
+  onOpenChange,
+  period,
+  isLocked = false,
+  periodName = '',
+  onSuccess
+}: UnitFormDialogProps) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -60,12 +75,15 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isLocked) {
+      toast.warning(`Periode ${periodName || period} telah dikunci. Buka kunci terlebih dahulu untuk mengubah proporsi unit.`)
+      return
+    }
+
     setLoading(true)
     setError(null)
 
     try {
-      const supabase = createClient()
-
       const proportionBPJS = parseFloat(formData.proportion_percentage)
       const proportionUMUM = formData.use_same_proportion ? proportionBPJS : parseFloat(formData.proportion_umum_percentage)
 
@@ -76,31 +94,44 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
       }
 
       if (isNaN(proportionUMUM) || proportionUMUM < 0 || proportionUMUM > 100) {
-        setError('Proporsi Pendapatan Umum harus antara 0 dan 100')
+        setError('Proporsi Pendapatan UMUM harus antara 0 dan 100')
         setLoading(false)
         return
       }
 
-      const updateData = {
-        code: formData.code,
-        name: formData.name,
-        proportion_percentage: proportionBPJS,
-        proportion_umum_percentage: proportionUMUM,
-        use_same_proportion: formData.use_same_proportion,
-        updated_at: new Date().toISOString(),
-      }
-
       if (unit) {
         // Update existing unit
-        const { error: updateError } = await supabase
-          .from('m_units')
-          .update(updateData)
-          .eq('id', unit.id)
+        if (period) {
+          const res = await updateUnitProportionAction(period, unit.id, {
+            proportion_percentage: proportionBPJS,
+            proportion_umum_percentage: proportionUMUM,
+            use_same_proportion: formData.use_same_proportion,
+          })
 
-        if (updateError) throw updateError
+          if (!res.success) {
+            throw new Error(res.error || 'Gagal memperbarui proporsi unit')
+          }
+        } else {
+          const supabase = createClient()
+          const { error: updateError } = await supabase
+            .from('m_units')
+            .update({
+              code: formData.code,
+              name: formData.name,
+              proportion_percentage: proportionBPJS,
+              proportion_umum_percentage: proportionUMUM,
+              use_same_proportion: formData.use_same_proportion,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', unit.id)
+
+          if (updateError) throw updateError
+        }
+
+        toast.success(`Proporsi unit ${unit.name} berhasil diperbarui`)
       } else {
         // Create new unit
-        // First check if code already exists
+        const supabase = createClient()
         const { data: existing } = await supabase
           .from('m_units')
           .select('id')
@@ -113,7 +144,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
           return
         }
 
-        const { error: insertError } = await supabase
+        const { data: newUnit, error: insertError } = await supabase
           .from('m_units')
           .insert({
             code: formData.code,
@@ -123,10 +154,23 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
             use_same_proportion: formData.use_same_proportion,
             is_active: true,
           })
+          .select()
+          .single()
 
         if (insertError) throw insertError
+
+        if (period && newUnit?.id) {
+          await updateUnitProportionAction(period, newUnit.id, {
+            proportion_percentage: proportionBPJS,
+            proportion_umum_percentage: proportionUMUM,
+            use_same_proportion: formData.use_same_proportion,
+          })
+        }
+
+        toast.success(`Unit ${formData.name} berhasil ditambahkan`)
       }
 
+      if (onSuccess) onSuccess()
       router.refresh()
       onOpenChange(false)
     } catch (err: any) {
@@ -140,11 +184,22 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[480px] w-[95vw] p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-6 pb-2">
-          <DialogTitle>{unit ? 'Ubah Unit' : 'Tambah Unit'}</DialogTitle>
+          <DialogTitle>{unit ? 'Ubah Proporsi Unit' : 'Tambah Unit Baru'}</DialogTitle>
           <DialogDescription>
-            {unit ? 'Perbarui informasi dan proporsi alokasi unit' : 'Buat unit organisasi baru'}
+            {unit
+              ? `Perbarui proporsi alokasi unit${periodName ? ` untuk periode ${periodName}` : ''}`
+              : 'Buat unit organisasi baru'}
           </DialogDescription>
         </DialogHeader>
+
+        {isLocked && (
+          <div className="mx-6 my-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2 text-amber-800 text-xs font-medium">
+            <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <span>
+              Periode <strong>{periodName || period}</strong> telah dikunci. Untuk mengubah besaran proporsi unit pada periode ini, silakan buka kunci periode terlebih dahulu.
+            </span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 p-6 pt-2 pb-6">
@@ -162,7 +217,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
                 value={formData.code}
                 onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
                 required
-                disabled={!!unit || loading}
+                disabled={!!unit || loading || isLocked}
                 className="bg-gray-50/50"
               />
             </div>
@@ -175,7 +230,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 required
-                disabled={loading}
+                disabled={loading || isLocked}
               />
             </div>
 
@@ -201,7 +256,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
                     }))
                   }}
                   required
-                  disabled={loading}
+                  disabled={loading || isLocked}
                   className="pr-10 border-blue-200 focus:border-blue-500"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-500 font-medium">%</span>
@@ -223,7 +278,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
                       proportion_umum_percentage: checked ? prev.proportion_percentage : prev.proportion_umum_percentage
                     }))
                   }}
-                  disabled={loading}
+                  disabled={loading || isLocked}
                   className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
                 />
                 <Label htmlFor="use_same_proportion" className="text-xs font-semibold text-slate-700 cursor-pointer">
@@ -246,7 +301,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
                       value={formData.proportion_umum_percentage}
                       onChange={(e) => setFormData({ ...formData, proportion_umum_percentage: e.target.value })}
                       required={!formData.use_same_proportion}
-                      disabled={loading}
+                      disabled={loading || isLocked}
                       className="pr-10 border-amber-200 focus:border-amber-500 bg-white"
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-500 font-medium">%</span>
@@ -256,7 +311,7 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
             </div>
 
             <p className="text-[11px] text-blue-600 bg-blue-50/50 p-2.5 rounded-lg leading-relaxed border border-blue-100">
-              Tip: Distribusi pendapatan BPJS Kesehatan dan Pendapatan UMUM kini dapat dikonfigurasi secara mandiri per unit.
+              Tip: Distribusi pendapatan BPJS Kesehatan dan Pendapatan UMUM dikonfigurasi secara mandiri per periode unit.
             </p>
           </div>
 
@@ -268,19 +323,20 @@ export function UnitFormDialog({ unit, open, onOpenChange }: UnitFormDialogProps
               disabled={loading}
               className="w-full sm:w-auto"
             >
-              Batal
+              Tutup
             </Button>
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 shadow-sm"
-            >
-              {loading ? 'Menyimpan...' : unit ? 'Simpan Perubahan' : 'Buat Unit'}
-            </Button>
+            {!isLocked && (
+              <Button
+                type="submit"
+                disabled={loading}
+                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 shadow-sm"
+              >
+                {loading ? 'Menyimpan...' : unit ? 'Simpan Perubahan' : 'Buat Unit'}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
   )
 }
-

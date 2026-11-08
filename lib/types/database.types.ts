@@ -206,4 +206,32 @@ export interface EmployeePeriod {
   updated_at: string
 }
 
+export interface UnitPeriod {
+  id: string
+  period: string
+  period_name: string
+  is_locked: boolean
+  locked_at: string | null
+  locked_by: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UnitPeriodSnapshot {
+  id: string
+  period: string
+  unit_id: string
+  code: string
+  name: string
+  proportion_percentage: number
+  proportion_umum_percentage?: number | null
+  use_same_proportion?: boolean
+  remuneration_style?: string
+  kpi_schema_mode?: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 export type UpdatePegawaiData = Partial<CreatePegawaiData>

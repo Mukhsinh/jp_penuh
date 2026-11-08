@@ -10,7 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
-import { Edit, Trash2, Power, PowerOff, Plus, Download, Upload, FileSpreadsheet, FileText, Loader2 } from 'lucide-react'
+import { Edit, Trash2, Power, PowerOff, Plus, Download, Upload, FileSpreadsheet, FileText, Loader2, Lock } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { UnitFormDialog } from './UnitFormDialog'
 import { DeleteUnitDialog } from './DeleteUnitDialog'
@@ -26,15 +26,25 @@ interface Unit {
   proportion_umum_percentage?: number | null
   use_same_proportion?: boolean
   is_active: boolean
+  employee_count?: number
   employees?: { count: number }[]
 }
 
 interface UnitTableProps {
   units: Unit[]
   onSuccess?: () => void
+  period?: string
+  isLocked?: boolean
+  periodName?: string
 }
 
-export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTableProps) {
+export const UnitTable = memo(function UnitTable({
+  units,
+  onSuccess,
+  period,
+  isLocked = false,
+  periodName = ''
+}: UnitTableProps) {
   const router = useRouter()
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -43,6 +53,10 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
   const [importProgress, setImportProgress] = useState(0)
 
   const handleAdd = () => {
+    if (isLocked) {
+      toast.warning(`Periode ${periodName || period} telah dikunci. Tambah unit hanya dapat dilakukan pada periode terbuka.`)
+      return
+    }
     setSelectedUnit(null)
     setIsFormOpen(true)
   }
@@ -53,11 +67,20 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
   }
 
   const handleDelete = (unit: Unit) => {
+    if (isLocked) {
+      toast.warning(`Periode ${periodName || period} telah dikunci. Hapus unit tidak dapat dilakukan pada periode terkunci.`)
+      return
+    }
     setSelectedUnit(unit)
     setIsDeleteOpen(true)
   }
 
   const handleToggleActive = async (unit: Unit) => {
+    if (isLocked) {
+      toast.warning(`Periode ${periodName || period} telah dikunci. Mengubah status unit tidak dapat dilakukan pada periode terkunci.`)
+      return
+    }
+
     const toastId = toast.loading(`${unit.is_active ? 'Menonaktifkan' : 'Mengaktifkan'} unit...`)
     try {
       const supabase = createClient()
@@ -82,6 +105,7 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
   }
 
   const getEmployeeCount = (unit: Unit) => {
+    if (unit.employee_count !== undefined) return unit.employee_count
     return unit.employees?.[0]?.count || 0
   }
 
@@ -90,17 +114,25 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
   }
 
   const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (isLocked) {
+      toast.warning(`Periode ${periodName || period} telah dikunci. Import porsi unit hanya dapat dilakukan pada periode terbuka.`)
+      if (event.target) event.target.value = ''
+      return
+    }
+
     const file = event.target.files?.[0]
     if (!file) return
 
     const formData = new FormData()
     formData.append('file', file)
+    if (period) {
+      formData.append('period', period)
+    }
 
     setIsImporting(true)
     setImportProgress(10)
     const toastId = toast.loading('Menyiapkan data import...')
 
-    // Simulate progress more smoothly
     let currentProgress = 10
     const progressInterval = setInterval(() => {
       currentProgress += (90 - currentProgress) * 0.1
@@ -134,7 +166,6 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
           }
         )
 
-        // Final refresh of the data
         if (onSuccess) onSuccess()
         router.refresh()
       } else {
@@ -145,7 +176,6 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
         console.error('Import detail errors:', result.errors)
       }
 
-      // Hide progress bar after success
       setTimeout(() => {
         setIsImporting(false)
         setImportProgress(0)
@@ -158,13 +188,13 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
       setIsImporting(false)
       setImportProgress(0)
     } finally {
-      // Reset input
       event.target.value = ''
     }
   }
 
   const handleDownloadReport = (format: 'excel' | 'pdf') => {
-    window.open(`/api/units/export?format=${format}`, '_blank')
+    const periodParam = period ? `&period=${period}` : ''
+    window.open(`/api/units/export?format=${format}${periodParam}`, '_blank')
   }
 
   return (
@@ -181,7 +211,13 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
           </Button>
 
           <Button
-            onClick={() => document.getElementById('import-units')?.click()}
+            onClick={() => {
+              if (isLocked) {
+                toast.warning(`Periode ${periodName || period} telah dikunci. Buka kunci terlebih dahulu jika ingin mengimport porsi unit.`)
+                return
+              }
+              document.getElementById('import-units')?.click()
+            }}
             className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 text-white text-xs h-9"
             disabled={isImporting}
           >
@@ -271,20 +307,24 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
                   <TableCell className="font-medium">{unit.code}</TableCell>
                   <TableCell className="max-w-[200px] truncate">{unit.name}</TableCell>
                   <TableCell className="hidden md:table-cell font-semibold text-blue-700">
-                    {unit.proportion_percentage.toFixed(2)}%
+                    {(Number(unit.proportion_percentage) || 0).toFixed(2)}%
                   </TableCell>
                   <TableCell className="hidden md:table-cell font-semibold text-slate-700">
                     {unit.use_same_proportion !== false ? (
                       <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium border border-blue-100">
-                        Sama BPJS ({unit.proportion_percentage.toFixed(2)}%)
+                        Sama BPJS ({(Number(unit.proportion_percentage) || 0).toFixed(2)}%)
                       </span>
                     ) : (
                       <span className="text-amber-700">
-                        {(unit.proportion_umum_percentage ?? unit.proportion_percentage).toFixed(2)}%
+                        {(Number(unit.proportion_umum_percentage ?? unit.proportion_percentage) || 0).toFixed(2)}%
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="hidden sm:table-cell">{getEmployeeCount(unit)}</TableCell>
+                  <TableCell className="hidden sm:table-cell">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700">
+                      {getEmployeeCount(unit)} org
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${unit.is_active
@@ -300,16 +340,19 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-blue-600"
+                        className={`h-8 w-8 ${isLocked ? 'text-slate-500 hover:text-slate-700' : 'text-blue-600'}`}
                         onClick={() => handleEdit(unit)}
+                        title={isLocked ? 'Lihat Detail Proporsi (Terkunci)' : 'Ubah Proporsi'}
                       >
-                        <Edit className="h-4 w-4" />
+                        {isLocked ? <Lock className="h-4 w-4" /> : <Edit className="h-4 w-4" />}
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         className={`h-8 w-8 ${unit.is_active ? 'text-amber-600' : 'text-emerald-600'}`}
                         onClick={() => handleToggleActive(unit)}
+                        disabled={isLocked}
+                        title={isLocked ? 'Terkunci' : unit.is_active ? 'Nonaktifkan' : 'Aktifkan'}
                       >
                         {unit.is_active ? (
                           <PowerOff className="h-4 w-4" />
@@ -322,7 +365,8 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
                         size="icon"
                         className="h-8 w-8 text-red-600"
                         onClick={() => handleDelete(unit)}
-                        disabled={getEmployeeCount(unit) > 0}
+                        disabled={isLocked || getEmployeeCount(unit) > 0}
+                        title={isLocked ? 'Terkunci' : getEmployeeCount(unit) > 0 ? 'Tidak dapat dihapus karena ada pegawai' : 'Hapus Unit'}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -339,6 +383,10 @@ export const UnitTable = memo(function UnitTable({ units, onSuccess }: UnitTable
         unit={selectedUnit}
         open={isFormOpen}
         onOpenChange={setIsFormOpen}
+        period={period}
+        isLocked={isLocked}
+        periodName={periodName}
+        onSuccess={onSuccess}
       />
 
       <DeleteUnitDialog

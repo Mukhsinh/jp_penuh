@@ -686,6 +686,33 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   }))
   console.log(`[Report] generateIncentiveReport: Fetched ${allEmployees?.length || 0} employees candidates for unit ${unitId}`)
 
+  // Fetch unit proportions locked/snapshotted for this specific period
+  const { data: periodUnitSnapshots } = await supabase
+    .from('t_unit_period_snapshots')
+    .select('unit_id, proportion_percentage, proportion_umum_percentage, use_same_proportion')
+    .eq('period', period)
+
+  const periodUnitPropMap = new Map<string, {
+    proportion_percentage: number
+    proportion_umum_percentage: number
+    use_same_proportion: boolean
+  }>()
+
+  if (periodUnitSnapshots && periodUnitSnapshots.length > 0) {
+    periodUnitSnapshots.forEach((s: any) => {
+      const bpjs = Number(s.proportion_percentage || 0)
+      const useSame = s.use_same_proportion !== false
+      const umum = useSame
+        ? bpjs
+        : (s.proportion_umum_percentage !== null && s.proportion_umum_percentage !== undefined ? Number(s.proportion_umum_percentage) : bpjs)
+      periodUnitPropMap.set(s.unit_id, {
+        proportion_percentage: bpjs,
+        proportion_umum_percentage: umum,
+        use_same_proportion: useSame
+      })
+    })
+  }
+
   if (allEmpError) {
     console.error('Error fetching employees:', allEmpError)
     throw new Error('Failed to fetch employee data: ' + JSON.stringify(allEmpError))
@@ -1362,13 +1389,26 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     // Determine Style
     const unitName = unitData?.name || '-'
     const isMedical = isMedicalUnit(uId, unitName)
-    const propUmumVal = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
-      ? unitData?.proportion_percentage
-      : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
+
+    // Period-aware unit proportion (respects locked period proportion snapshots)
+    const snapProp = uId ? periodUnitPropMap.get(uId) : null
+    let propUmumVal: any
+    let propBPJSVal: any
+
+    if (snapProp) {
+      propBPJSVal = snapProp.proportion_percentage
+      propUmumVal = snapProp.use_same_proportion ? snapProp.proportion_percentage : snapProp.proportion_umum_percentage
+    } else {
+      propBPJSVal = unitData?.proportion_percentage || 0
+      propUmumVal = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
+        ? unitData?.proportion_percentage
+        : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
+    }
+
     const unitProp = parseFloat(
       revenueType === 'umum'
         ? String(propUmumVal || '0')
-        : String(unitData?.proportion_percentage || '0')
+        : String(propBPJSVal || '0')
     )
     const totalSkorUnit = unitTotalScoresMap.get(uId) || 0
     const empCount = unitEmployeeCountMap.get(uId) || 0
@@ -1471,13 +1511,26 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
     const uId = unitData?.id
     const unitName = unitData?.name || '-'
-    const rowPropUmum = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
-      ? unitData?.proportion_percentage
-      : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
+
+    // Period-aware unit proportion (respects locked period proportion snapshots)
+    const snapProp = uId ? periodUnitPropMap.get(uId) : null
+    let rowPropUmum: any
+    let rowPropBPJS: any
+
+    if (snapProp) {
+      rowPropBPJS = snapProp.proportion_percentage
+      rowPropUmum = snapProp.use_same_proportion ? snapProp.proportion_percentage : snapProp.proportion_umum_percentage
+    } else {
+      rowPropBPJS = unitData?.proportion_percentage || 0
+      rowPropUmum = (unitData?.use_same_proportion !== false || !Number(unitData?.proportion_umum_percentage))
+        ? unitData?.proportion_percentage
+        : (unitData?.proportion_umum_percentage || unitData?.proportion_percentage || '0')
+    }
+
     const unitProp = parseFloat(
       revenueType === 'umum'
         ? String(rowPropUmum || '0')
-        : String(unitData?.proportion_percentage || '0')
+        : String(rowPropBPJS || '0')
     )
     const pir = uId ? (unitPIRMap.get(uId) || 0) : 0
     const totalSkorUnit = uId ? (unitTotalScoresMap.get(uId) || 0) : 0

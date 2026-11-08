@@ -3,6 +3,7 @@
 import { createAdminClient, createClient } from '@/lib/supabase/server'
 import type { Pegawai, CreatePegawaiData, UpdatePegawaiData, EmployeePeriod } from '@/lib/types/database.types'
 import { formatPeriodToMonthName } from '@/lib/utils/format'
+import { createNextUnitPeriod } from '@/lib/services/unit-period.service'
 
 /**
  * Ensure baseline period 2026-01 exists and is established
@@ -271,6 +272,9 @@ export async function createNextEmployeePeriod(
 
       if (insertErr) throw insertErr
     }
+
+    // Ensure unit period and snapshots are also prepared for newPeriod
+    await createNextUnitPeriod(newPeriod, sourcePeriod)
 
     // 2. Check if snapshots already exist for newPeriod
     const { count } = await adminClient

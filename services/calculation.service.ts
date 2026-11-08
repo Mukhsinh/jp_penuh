@@ -351,17 +351,36 @@ export async function calculateFinalDistribution(period: string) {
     throw new Error('Pool allocated amount is not calculated. Please ensure pool has revenue and deduction data.')
   }
 
-  // Get all units with their proportions
-  const { data: units, error: unitsError } = await supabase
-    .from('m_units')
-    .select('id, proportion_percentage')
-    .eq('is_active', true)
+  // Get all units with their proportions (preferring period snapshot if available)
+  let unitProportions: { id: string; proportion_percentage: number }[] = []
+  if (pool.period) {
+    const { data: snapshots } = await supabase
+      .from('t_unit_period_snapshots')
+      .select('unit_id, proportion_percentage')
+      .eq('period', pool.period)
+      .eq('is_active', true)
 
-  if (unitsError) throw unitsError
+    if (snapshots && snapshots.length > 0) {
+      unitProportions = snapshots.map((s: any) => ({
+        id: s.unit_id,
+        proportion_percentage: Number(s.proportion_percentage)
+      }))
+    }
+  }
+
+  if (unitProportions.length === 0) {
+    const { data: units, error: unitsError } = await supabase
+      .from('m_units')
+      .select('id, proportion_percentage')
+      .eq('is_active', true)
+
+    if (unitsError) throw unitsError
+    unitProportions = units || []
+  }
 
   const results = []
 
-  for (const unit of units!) {
+  for (const unit of unitProportions) {
     // Calculate unit allocation
     const unitAllocation = calculateUnitAllocation(
       pool.allocated_amount,
