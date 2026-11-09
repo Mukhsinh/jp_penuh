@@ -17,9 +17,11 @@ export function formatNumber(value: number | string, decimals: number = 0): stri
     return '0'
   }
 
+  const safeDecimals = Math.max(0, Math.min(20, Math.floor(Number(decimals) || 0)))
+
   return new Intl.NumberFormat('id-ID', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: safeDecimals,
+    maximumFractionDigits: safeDecimals,
   }).format(num)
 }
 
@@ -27,17 +29,23 @@ export function formatNumber(value: number | string, decimals: number = 0): stri
  * Format decimal value with flexible precision (up to maxDecimals, default 4)
  * @param value - Number to format
  * @param maxDecimals - Maximum decimal places (default: 4)
+ * @param minDecimals - Minimum decimal places (optional)
  * @returns Formatted string
  */
 export function formatDecimal(value: number | string, maxDecimals: number = 4, minDecimals?: number): string {
   const num = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value
   if (isNaN(num)) return '0'
 
-  const min = minDecimals !== undefined ? minDecimals : (num > 0 && num < 100 && num % 1 !== 0 ? 4 : 0)
+  const safeMax = Math.max(0, Math.min(20, Math.floor(Number(maxDecimals ?? 4) || 0)))
+  
+  let safeMin = 0
+  if (minDecimals !== undefined && !isNaN(Number(minDecimals))) {
+    safeMin = Math.max(0, Math.min(safeMax, Math.floor(Number(minDecimals))))
+  }
 
   return new Intl.NumberFormat('id-ID', {
-    minimumFractionDigits: min,
-    maximumFractionDigits: maxDecimals,
+    minimumFractionDigits: safeMin,
+    maximumFractionDigits: safeMax,
   }).format(num)
 }
 
@@ -45,6 +53,7 @@ export function formatDecimal(value: number | string, maxDecimals: number = 4, m
  * Format currency as Indonesian Rupiah
  * @param value - Amount to format
  * @param showSymbol - Whether to show Rp symbol (default: true)
+ * @param decimals - Number of decimal places (default: 0)
  * @returns Formatted currency string
  */
 export function formatCurrency(value: number | string, showSymbol: boolean = true, decimals: number = 0): string {
@@ -54,16 +63,18 @@ export function formatCurrency(value: number | string, showSymbol: boolean = tru
     return showSymbol ? 'Rp 0' : '0'
   }
 
+  const safeDecimals = Math.max(0, Math.min(20, Math.floor(Number(decimals) || 0)))
+
   if (showSymbol) {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
+      minimumFractionDigits: safeDecimals,
+      maximumFractionDigits: safeDecimals,
     }).format(num)
   }
 
-  return formatNumber(num, decimals)
+  return formatNumber(num, safeDecimals)
 }
 
 /**
