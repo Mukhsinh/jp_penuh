@@ -7,8 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, Search, Filter, RefreshCw, BarChart3, AlertCircle, Copy, Loader2, CheckCircle2, Lock, Unlock, ShieldCheck, Clock } from 'lucide-react'
+import { Plus, Search, Filter, RefreshCw, BarChart3, AlertCircle, Copy, Loader2, CheckCircle2, Lock, Unlock, ShieldCheck, Clock, Users, FileCheck, Info, CheckCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import { Progress } from '@/components/ui/progress'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import AssessmentTable from './AssessmentTable'
 import AssessmentReports from './AssessmentReports'
 import AddAssessmentPeriodDialog from './AddAssessmentPeriodDialog'
@@ -53,6 +55,18 @@ export default function AssessmentPageContent({
     completion_rate: 0
   })
   const [copyingUnit, setCopyingUnit] = useState(false)
+  const [copyProgress, setCopyProgress] = useState(0)
+  const [copyProgressStatus, setCopyProgressStatus] = useState('')
+  const [copySuccessData, setCopySuccessData] = useState<{
+    unitName: string
+    previousPeriod: string
+    currentPeriod: string
+    revenueType: string
+    recordCount: number
+    employeeCount: number
+    unaffectedCount: number
+    message: string
+  } | null>(null)
   const [copyingBpjsToUmum, setCopyingBpjsToUmum] = useState(false)
   const [isPeriodApproved, setIsPeriodApproved] = useState(false)
   const [allPeriodStatuses, setAllPeriodStatuses] = useState<{ period: string; status: string; isApproved: boolean }[]>([])
@@ -318,11 +332,32 @@ export default function AssessmentPageContent({
     }
     const previousPeriod = availablePeriods[currentIndex + 1]
 
-    if (!confirm(`Konfirmasi: Salin penilaian SELURUH pegawai di ${unitName} dari periode ${previousPeriod} ke periode ${selectedPeriod}?\n\nPeringatan: Data penilaian yang sudah ada di periode ${selectedPeriod} untuk pegawai tersebut akan diperbarui/ditimpa.`)) {
+    const revLabel = activeRevenueType === 'umum' ? 'UMUM' : 'BPJS'
+    if (!confirm(`Konfirmasi: Salin penilaian (${revLabel}) pegawai di ${unitName} dari periode ${previousPeriod} ke periode ${selectedPeriod}?\n\nCatatan:\n- Hanya pegawai yang sama-sama terdaftar di unit ini pada kedua periode yang akan disalin.\n- Pegawai yang berbeda/baru dapat dinilai secara manual.\n- Data penilaian yang sudah ada di periode ${selectedPeriod} untuk pegawai tersebut akan diperbarui.`)) {
       return
     }
 
     setCopyingUnit(true)
+    setCopyProgress(10)
+    setCopyProgressStatus('Menghubungkan ke server...')
+
+    let currentProg = 10
+    const progressInterval = setInterval(() => {
+      if (currentProg < 35) {
+        currentProg += 10
+        setCopyProgress(currentProg)
+        setCopyProgressStatus('Menganalisis daftar pegawai antar periode...')
+      } else if (currentProg < 70) {
+        currentProg += 6
+        setCopyProgress(currentProg)
+        setCopyProgressStatus('Mengambil & memvalidasi data penilaian periode sebelumnya...')
+      } else if (currentProg < 90) {
+        currentProg += 3
+        setCopyProgress(currentProg)
+        setCopyProgressStatus('Menyimpan penilaian & menyinkronkan data realisasi...')
+      }
+    }, 250)
+
     try {
       const response = await fetch('/api/assessment/bulk-copy', {
         method: 'POST',
@@ -330,22 +365,54 @@ export default function AssessmentPageContent({
         body: JSON.stringify({
           unit_id: unitId,
           current_period: selectedPeriod,
-          previous_period: previousPeriod
+          previous_period: previousPeriod,
+          revenue_type: activeRevenueType
         })
       })
 
       const data = await response.json()
-      if (response.ok) {
-        alert(data.message || 'Penyalinan massal berhasil!')
+      clearInterval(progressInterval)
+
+      if (response.ok && data.success) {
+        setCopyProgress(100)
+        setCopyProgressStatus('Penyalinan selesai!')
+
+        setCopySuccessData({
+          unitName,
+          previousPeriod,
+          currentPeriod: selectedPeriod,
+          revenueType: activeRevenueType.toUpperCase(),
+          recordCount: data.count || 0,
+          employeeCount: data.copied_employees_count || 0,
+          unaffectedCount: data.unaffected_employees_count || 0,
+          message: data.message || 'Penyalinan massal berhasil!'
+        })
+
+        toast.success(`Penyalinan unit ${unitName} berhasil!`, {
+          description: `${data.count || 0} record penilaian untuk ${data.copied_employees_count || 0} pegawai berhasil disalin ke ${selectedPeriod}.`,
+          duration: 6000
+        })
+
         handleRefresh()
       } else {
+        setCopyProgress(0)
+        setCopyProgressStatus('')
+        toast.error('Gagal: ' + (data.error || 'Terjadi kesalahan'))
         alert('Gagal: ' + (data.error || 'Terjadi kesalahan'))
       }
     } catch (error) {
+      clearInterval(progressInterval)
+      setCopyProgress(0)
+      setCopyProgressStatus('')
       console.error('Bulk copy error:', error)
+      toast.error('Terjadi kesalahan sistem saat melakukan penyalinan massal.')
       alert('Terjadi kesalahan sistem saat melakukan penyalinan massal.')
     } finally {
-      setCopyingUnit(false)
+      setTimeout(() => {
+        setCopyingUnit(false)
+        setCopyProgress(0)
+        setCopyProgressStatus('')
+      }, 700)
     }
   }
 
@@ -687,8 +754,17 @@ export default function AssessmentPageContent({
                     title={isPeriodApproved ? 'Periode ini telah disetujui (Terkunci)' : undefined}
                     className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50"
                   >
-                    {copyingUnit ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Copy className="h-4 w-4 mr-2" />}
-                    Salin Penilaian Unit
+                    {copyingUnit ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin text-blue-600" />
+                        <span>Menyalin ({copyProgress}%)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4 mr-2 text-blue-600" />
+                        <span>Salin Penilaian Unit</span>
+                      </>
+                    )}
                   </Button>
                   <Button onClick={handleRefresh} variant="outline" size="sm" disabled={loading || copyingUnit || copyingBpjsToUmum}>
                     <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
@@ -698,6 +774,32 @@ export default function AssessmentPageContent({
               </div>
             </CardHeader>
             <CardContent>
+              {/* Loading Bar for Bulk Copy */}
+              {copyingUnit && (
+                <div className="mb-6 p-4 rounded-xl border-2 border-blue-200 bg-blue-50/70 shadow-sm animate-in fade-in zoom-in-95 duration-300">
+                  <div className="flex justify-between items-center mb-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-3 w-3 rounded-full bg-blue-600 animate-pulse" />
+                      <span className="text-sm font-semibold text-blue-950">
+                        {copyProgressStatus || 'Memproses Penyalinan Penilaian Unit...'}
+                      </span>
+                    </div>
+                    <span className="text-xs font-bold text-blue-700 bg-blue-100/80 border border-blue-200 px-2.5 py-1 rounded-md font-mono">
+                      {copyProgress}%
+                    </span>
+                  </div>
+                  <Progress value={copyProgress} className="h-2.5 bg-blue-100" />
+                  <div className="flex justify-between items-center mt-2.5">
+                    <p className="text-[11px] text-blue-600/90 font-medium">
+                      Mohon tunggu, proses penyalinan sedang berjalan secara otomatis...
+                    </p>
+                    <span className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider">
+                      {copyProgress === 100 ? 'Selesai' : 'Sedang Bekerja'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col sm:flex-row gap-4 mb-6">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
@@ -835,6 +937,90 @@ export default function AssessmentPageContent({
           />
         </TabsContent>
       </Tabs>
+
+      {/* Dialog Notifikasi Berhasil Salin Penilaian Unit */}
+      <Dialog open={!!copySuccessData} onOpenChange={(open) => !open && setCopySuccessData(null)}>
+        <DialogContent className="max-w-md p-6">
+          <DialogHeader className="text-center sm:text-center items-center pb-2">
+            <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center mb-2 mx-auto">
+              <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+            </div>
+            <DialogTitle className="text-xl font-bold text-slate-900">
+              Penyalinan Penilaian Berhasil!
+            </DialogTitle>
+            <DialogDescription className="text-sm text-slate-500">
+              Penilaian KPI telah berhasil disalin ke periode aktif.
+            </DialogDescription>
+          </DialogHeader>
+
+          {copySuccessData && (
+            <div className="space-y-4 py-2">
+              {/* Context Badges */}
+              <div className="flex flex-wrap items-center justify-center gap-2 p-2.5 bg-slate-50 rounded-lg border text-xs">
+                <span className="font-medium text-slate-700">Unit: <strong className="text-slate-900">{copySuccessData.unitName}</strong></span>
+                <span className="text-slate-300">•</span>
+                <span className="font-medium text-slate-700">Periode: <strong className="text-blue-700">{copySuccessData.previousPeriod} ➔ {copySuccessData.currentPeriod}</strong></span>
+                <span className="text-slate-300">•</span>
+                <span className="font-medium text-slate-700">Jenis: <strong className="text-amber-700">{copySuccessData.revenueType}</strong></span>
+              </div>
+
+              {/* Stat Cards */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-xl text-center">
+                  <div className="flex items-center justify-center gap-1.5 text-blue-700 mb-1">
+                    <FileCheck className="h-4 w-4" />
+                    <span className="text-xs font-semibold">Record Penilaian</span>
+                  </div>
+                  <div className="text-2xl font-bold text-blue-900">
+                    {copySuccessData.recordCount}
+                  </div>
+                  <div className="text-[11px] text-blue-600/80">berhasil disalin</div>
+                </div>
+
+                <div className="p-3 bg-emerald-50/70 border border-emerald-100 rounded-xl text-center">
+                  <div className="flex items-center justify-center gap-1.5 text-emerald-700 mb-1">
+                    <Users className="h-4 w-4" />
+                    <span className="text-xs font-semibold">Pegawai Dinilai</span>
+                  </div>
+                  <div className="text-2xl font-bold text-emerald-900">
+                    {copySuccessData.employeeCount}
+                  </div>
+                  <div className="text-[11px] text-emerald-600/80">pegawai terisi</div>
+                </div>
+              </div>
+
+              {/* Notice for Unaffected / Different Employees */}
+              {copySuccessData.unaffectedCount > 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+                  <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Perhatian Pegawai Baru/Berbeda:</span>
+                    <p className="mt-0.5 text-amber-800">
+                      Terdapat <strong>{copySuccessData.unaffectedCount} pegawai</strong> di periode ini yang tidak memiliki penilaian di periode lalu atau baru terdaftar di unit ini. Pegawai tersebut dapat dinilai secara manual.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-600">
+                  <Info className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+                  <p>
+                    Seluruh pegawai aktif di unit ini telah memiliki data penilaian yang disalin dari periode sebelumnya. Anda tetap dapat mengedit atau mengubah penilaian secara manual.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="sm:justify-center mt-2">
+            <Button
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium"
+              onClick={() => setCopySuccessData(null)}
+            >
+              Mengerti & Lanjutkan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AddAssessmentPeriodDialog
         isOpen={isAddPeriodDialogOpen}
