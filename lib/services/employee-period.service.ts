@@ -148,52 +148,104 @@ export async function lockEmployeePeriod(period: string, lockedBy: string): Prom
 
       const prevPeriod = prevPeriods?.[0]?.period
       let empsToSnapshot: any[] = []
+      const seenIds = new Set<string>()
 
       if (prevPeriod) {
         const { data: prevSnapshots } = await adminClient
           .from('t_employee_period_snapshots')
           .select('*')
           .eq('period', prevPeriod)
-        empsToSnapshot = (prevSnapshots || []).map(s => ({
-          ...s,
-          id: undefined,
-          period,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }))
+        for (const s of (prevSnapshots || [])) {
+          seenIds.add(s.employee_id)
+          empsToSnapshot.push({
+            ...s,
+            id: undefined,
+            period,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+        }
       }
 
-      if (empsToSnapshot.length === 0) {
-        const { data: currentEmps } = await adminClient
-          .from('m_employees')
-          .select('*')
-          .neq('role', 'superadmin')
-        empsToSnapshot = (currentEmps || []).map(e => ({
-          period,
-          employee_id: e.id,
-          employee_code: e.employee_code,
-          full_name: e.full_name,
-          unit_id: e.unit_id,
-          position: e.position,
-          role: e.role || 'employee',
-          employee_status: e.employee_status,
-          employment_status: e.employment_status,
-          pns_grade: e.pns_grade,
-          tax_status: e.tax_status,
-          tax_type: e.tax_type,
-          nik: e.nik,
-          bank_name: e.bank_name,
-          bank_account_number: e.bank_account_number,
-          bank_account_name: e.bank_account_name,
-          phone: e.phone,
-          email: e.email,
-          is_active: e.is_active !== undefined ? e.is_active : true
-        }))
+      // Also ensure any newly added active employees in m_employees not present in previous snapshot are included
+      const { data: masterEmps } = await adminClient
+        .from('m_employees')
+        .select('*')
+        .neq('role', 'superadmin')
+        .eq('is_active', true)
+
+      for (const e of (masterEmps || [])) {
+        if (!seenIds.has(e.id)) {
+          empsToSnapshot.push({
+            period,
+            employee_id: e.id,
+            employee_code: e.employee_code,
+            full_name: e.full_name,
+            unit_id: e.unit_id,
+            position: e.position,
+            role: e.role || 'employee',
+            employee_status: e.employee_status,
+            employment_status: e.employment_status,
+            pns_grade: e.pns_grade,
+            tax_status: e.tax_status,
+            tax_type: e.tax_type,
+            nik: e.nik,
+            bank_name: e.bank_name,
+            bank_account_number: e.bank_account_number,
+            bank_account_name: e.bank_account_name,
+            phone: e.phone,
+            email: e.email,
+            is_active: e.is_active !== undefined ? e.is_active : true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+        }
       }
 
       for (let i = 0; i < empsToSnapshot.length; i += 200) {
         const batch = empsToSnapshot.slice(i, i + 200)
         await adminClient.from('t_employee_period_snapshots').upsert(batch, { onConflict: 'period,employee_id' })
+      }
+    } else {
+      // Snapshot exists: verify whether any newly created active employees in m_employees are missing from this period
+      const { data: currentSnaps } = await adminClient
+        .from('t_employee_period_snapshots')
+        .select('employee_id')
+        .eq('period', period)
+
+      const existingSet = new Set((currentSnaps || []).map(s => s.employee_id))
+      const { data: masterEmps } = await adminClient
+        .from('m_employees')
+        .select('*')
+        .neq('role', 'superadmin')
+        .eq('is_active', true)
+
+      const missingCandidates = (masterEmps || []).filter(e => !existingSet.has(e.id)).map(e => ({
+        period,
+        employee_id: e.id,
+        employee_code: e.employee_code,
+        full_name: e.full_name,
+        unit_id: e.unit_id,
+        position: e.position,
+        role: e.role || 'employee',
+        employee_status: e.employee_status,
+        employment_status: e.employment_status,
+        pns_grade: e.pns_grade,
+        tax_status: e.tax_status,
+        tax_type: e.tax_type,
+        nik: e.nik,
+        bank_name: e.bank_name,
+        bank_account_number: e.bank_account_number,
+        bank_account_name: e.bank_account_name,
+        phone: e.phone,
+        email: e.email,
+        is_active: e.is_active !== undefined ? e.is_active : true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }))
+
+      if (missingCandidates.length > 0) {
+        await adminClient.from('t_employee_period_snapshots').upsert(missingCandidates, { onConflict: 'period,employee_id' })
       }
     }
 
@@ -386,6 +438,8 @@ export async function createNextEmployeePeriod(
       }
 
       let candidates: any[] = []
+      const seenEmployeeIds = new Set<string>()
+
       if (sourceToUse) {
         const { data: sourceSnapshots } = await adminClient
           .from('t_employee_period_snapshots')
@@ -393,56 +447,67 @@ export async function createNextEmployeePeriod(
           .eq('period', sourceToUse)
 
         if (sourceSnapshots && sourceSnapshots.length > 0) {
-          candidates = sourceSnapshots.map(s => ({
-            period: newPeriod,
-            employee_id: s.employee_id,
-            employee_code: s.employee_code,
-            full_name: s.full_name,
-            unit_id: s.unit_id,
-            position: s.position,
-            role: s.role || 'employee',
-            employee_status: s.employee_status,
-            employment_status: s.employment_status,
-            pns_grade: s.pns_grade,
-            tax_status: s.tax_status,
-            tax_type: s.tax_type,
-            nik: s.nik,
-            bank_name: s.bank_name,
-            bank_account_number: s.bank_account_number,
-            bank_account_name: s.bank_account_name,
-            phone: s.phone,
-            email: s.email,
-            is_active: s.is_active
-          }))
+          for (const s of sourceSnapshots) {
+            seenEmployeeIds.add(s.employee_id)
+            candidates.push({
+              period: newPeriod,
+              employee_id: s.employee_id,
+              employee_code: s.employee_code,
+              full_name: s.full_name,
+              unit_id: s.unit_id,
+              position: s.position,
+              role: s.role || 'employee',
+              employee_status: s.employee_status,
+              employment_status: s.employment_status,
+              pns_grade: s.pns_grade,
+              tax_status: s.tax_status,
+              tax_type: s.tax_type,
+              nik: s.nik,
+              bank_name: s.bank_name,
+              bank_account_number: s.bank_account_number,
+              bank_account_name: s.bank_account_name,
+              phone: s.phone,
+              email: s.email,
+              is_active: s.is_active
+            })
+          }
         }
       }
 
-      if (candidates.length === 0) {
-        const { data: masterEmps } = await adminClient
-          .from('m_employees')
-          .select('*')
-          .neq('role', 'superadmin')
-        candidates = (masterEmps || []).map(e => ({
-          period: newPeriod,
-          employee_id: e.id,
-          employee_code: e.employee_code,
-          full_name: e.full_name,
-          unit_id: e.unit_id,
-          position: e.position,
-          role: e.role || 'employee',
-          employee_status: e.employee_status,
-          employment_status: e.employment_status,
-          pns_grade: e.pns_grade,
-          tax_status: e.tax_status,
-          tax_type: e.tax_type,
-          nik: e.nik,
-          bank_name: e.bank_name,
-          bank_account_number: e.bank_account_number,
-          bank_account_name: e.bank_account_name,
-          phone: e.phone,
-          email: e.email,
-          is_active: e.is_active !== undefined ? e.is_active : true
-        }))
+      // CRITICAL: ALSO include all active employees from m_employees that were not present in sourceSnapshots
+      // (e.g. newly added employees in m_employees created after source period was locked)
+      const { data: masterEmps } = await adminClient
+        .from('m_employees')
+        .select('*')
+        .neq('role', 'superadmin')
+        .eq('is_active', true)
+
+      if (masterEmps && masterEmps.length > 0) {
+        for (const e of masterEmps) {
+          if (!seenEmployeeIds.has(e.id)) {
+            candidates.push({
+              period: newPeriod,
+              employee_id: e.id,
+              employee_code: e.employee_code,
+              full_name: e.full_name,
+              unit_id: e.unit_id,
+              position: e.position,
+              role: e.role || 'employee',
+              employee_status: e.employee_status,
+              employment_status: e.employment_status,
+              pns_grade: e.pns_grade,
+              tax_status: e.tax_status,
+              tax_type: e.tax_type,
+              nik: e.nik,
+              bank_name: e.bank_name,
+              bank_account_number: e.bank_account_number,
+              bank_account_name: e.bank_account_name,
+              phone: e.phone,
+              email: e.email,
+              is_active: e.is_active !== undefined ? e.is_active : true
+            })
+          }
+        }
       }
 
       for (let i = 0; i < candidates.length; i += 200) {
@@ -483,17 +548,64 @@ export async function rotateEmployeeUnit(
       }
     }
 
+    // Resolve true employee_id if a snapshot UUID was passed
+    let actualEmployeeId = employeeId
+    const { data: snapById } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('employee_id')
+      .eq('id', employeeId)
+      .maybeSingle()
+
+    if (snapById?.employee_id) {
+      actualEmployeeId = snapById.employee_id
+    }
+
     // 2. Update snapshot for this period
-    const { error: snapErr } = await adminClient
+    const { data: updatedSnap, error: snapErr } = await adminClient
       .from('t_employee_period_snapshots')
       .update({
         unit_id: newUnitId,
         updated_at: new Date().toISOString()
       })
       .eq('period', period)
-      .eq('employee_id', employeeId)
+      .eq('employee_id', actualEmployeeId)
+      .select()
 
     if (snapErr) throw snapErr
+
+    // If no row was updated in snapshot (e.g. employee was added directly to master without period snapshot),
+    // upsert the snapshot row now
+    if (!updatedSnap || updatedSnap.length === 0) {
+      const { data: empMaster } = await adminClient
+        .from('m_employees')
+        .select('*')
+        .eq('id', actualEmployeeId)
+        .maybeSingle()
+
+      if (empMaster) {
+        await adminClient.from('t_employee_period_snapshots').upsert([{
+          period,
+          employee_id: empMaster.id,
+          employee_code: empMaster.employee_code,
+          full_name: empMaster.full_name,
+          unit_id: newUnitId,
+          position: empMaster.position,
+          role: empMaster.role || 'employee',
+          employee_status: empMaster.employee_status,
+          employment_status: empMaster.employment_status,
+          pns_grade: empMaster.pns_grade,
+          tax_status: empMaster.tax_status,
+          tax_type: empMaster.tax_type,
+          nik: empMaster.nik,
+          bank_name: empMaster.bank_name,
+          bank_account_number: empMaster.bank_account_number,
+          bank_account_name: empMaster.bank_account_name,
+          phone: empMaster.phone,
+          email: empMaster.email,
+          is_active: empMaster.is_active
+        }], { onConflict: 'period,employee_id' })
+      }
+    }
 
     // 3. If this is the latest open period, sync to m_employees as current unit
     const { data: laterPeriods } = await adminClient
@@ -509,7 +621,7 @@ export async function rotateEmployeeUnit(
           unit_id: newUnitId,
           updated_at: new Date().toISOString()
         })
-        .eq('id', employeeId)
+        .eq('id', actualEmployeeId)
     }
 
     return { success: true }

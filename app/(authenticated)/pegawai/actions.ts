@@ -289,7 +289,9 @@ export async function getPegawaiWithUnits(
     // Transform data to match Pegawai type
     const transformedData: Pegawai[] = filteredRows.map((item: any) => ({
       ...item,
-      id: useSnapshot ? item.employee_id : item.id, // Ensure id points to employee ID
+      snapshot_id: useSnapshot ? item.id : undefined,
+      id: useSnapshot ? (item.employee_id || item.id) : item.id,
+      employee_id: useSnapshot ? (item.employee_id || item.id) : item.id,
       m_units: item.m_units || undefined
     }))
 
@@ -392,6 +394,41 @@ export async function createPegawai(data: CreatePegawaiData, period?: string) {
           email: newPegawai.email,
           is_active: newPegawai.is_active
         }], { onConflict: 'period,employee_id' })
+
+      // Also ensure this new employee is added to any subsequent draft periods
+      const { data: laterDrafts } = await supabase
+        .from('t_employee_periods')
+        .select('period')
+        .gt('period', period)
+        .eq('is_locked', false)
+
+      if (laterDrafts && laterDrafts.length > 0) {
+        for (const draft of laterDrafts) {
+          await supabase
+            .from('t_employee_period_snapshots')
+            .upsert([{
+              period: draft.period,
+              employee_id: newPegawai.id,
+              employee_code: newPegawai.employee_code,
+              full_name: newPegawai.full_name,
+              unit_id: newPegawai.unit_id,
+              position: newPegawai.position,
+              role: newPegawai.role,
+              employee_status: newPegawai.employee_status,
+              employment_status: newPegawai.employment_status,
+              pns_grade: newPegawai.pns_grade,
+              tax_status: newPegawai.tax_status,
+              tax_type: newPegawai.tax_type,
+              nik: newPegawai.nik,
+              bank_name: newPegawai.bank_name,
+              bank_account_number: newPegawai.bank_account_number,
+              bank_account_name: newPegawai.bank_account_name,
+              phone: newPegawai.phone,
+              email: newPegawai.email,
+              is_active: newPegawai.is_active
+            }], { onConflict: 'period,employee_id' })
+        }
+      }
     }
 
     revalidatePath('/pegawai')
@@ -425,6 +462,18 @@ export async function updatePegawai(
 
     const adminSupabase = await createAdminClient()
 
+    // Resolve true employee_id if a snapshot UUID was passed
+    let actualEmployeeId = id
+    const { data: snapById } = await adminSupabase
+      .from('t_employee_period_snapshots')
+      .select('employee_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (snapById?.employee_id) {
+      actualEmployeeId = snapById.employee_id
+    }
+
     // Check period lock status
     if (period) {
       const { data: periodRow } = await adminSupabase
@@ -449,7 +498,7 @@ export async function updatePegawai(
 
     // Update in period snapshot if period is specified
     if (period) {
-      const { error: snapErr } = await adminSupabase
+      const { data: updatedSnap, error: snapErr } = await adminSupabase
         .from('t_employee_period_snapshots')
         .update({
           employee_code: data.employee_code,
@@ -471,10 +520,35 @@ export async function updatePegawai(
           updated_at: new Date().toISOString()
         })
         .eq('period', period)
-        .eq('employee_id', id)
+        .eq('employee_id', actualEmployeeId)
+        .select()
 
       if (snapErr) {
         console.error('Update snapshot error:', snapErr)
+      }
+
+      // If employee did not have a snapshot row yet for this period, upsert it
+      if (!updatedSnap || updatedSnap.length === 0) {
+        await adminSupabase.from('t_employee_period_snapshots').upsert([{
+          period,
+          employee_id: actualEmployeeId,
+          employee_code: data.employee_code,
+          full_name: data.full_name,
+          email: finalEmail,
+          unit_id: assignedUnitId,
+          position: data.position || null,
+          phone: data.phone || null,
+          nik: data.nik || null,
+          bank_name: data.bank_name || null,
+          bank_account_number: data.bank_account_number || null,
+          bank_account_name: data.bank_account_name || null,
+          tax_status: data.tax_status,
+          tax_type: data.tax_type,
+          employment_status: data.employment_status,
+          employee_status: data.employee_status || (data.employment_status as string),
+          pns_grade: data.pns_grade !== undefined ? String(data.pns_grade) : null,
+          is_active: data.is_active
+        }], { onConflict: 'period,employee_id' })
       }
     }
 
@@ -514,7 +588,7 @@ export async function updatePegawai(
           is_active: data.is_active,
           updated_at: new Date().toISOString()
         })
-        .eq('id', id)
+        .eq('id', actualEmployeeId)
 
       if (isUnitManager) {
         updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
@@ -556,6 +630,18 @@ export async function deletePegawai(id: string, period?: string): Promise<{ succ
 
     const adminSupabase = await createAdminClient()
 
+    // Resolve true employee_id if a snapshot UUID was passed
+    let actualEmployeeId = id
+    const { data: snapById } = await adminSupabase
+      .from('t_employee_period_snapshots')
+      .select('employee_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (snapById?.employee_id) {
+      actualEmployeeId = snapById.employee_id
+    }
+
     // If period is provided, check if locked
     if (period) {
       const { data: periodRow } = await adminSupabase
@@ -570,12 +656,20 @@ export async function deletePegawai(id: string, period?: string): Promise<{ succ
           error: `Periode ${periodRow.period_name || period} telah dikunci. Pegawai tidak dapat dihapus pada periode yang sudah dikunci.`
         }
       }
+
+      // Delete from snapshot for this specific draft period
+      await adminSupabase
+        .from('t_employee_period_snapshots')
+        .delete()
+        .eq('period', period)
+        .eq('employee_id', actualEmployeeId)
     }
 
+    // Delete from master employees table
     let deleteQuery = adminSupabase
       .from('m_employees')
       .delete()
-      .eq('id', id)
+      .eq('id', actualEmployeeId)
 
     if (isUnitManager) {
       deleteQuery = deleteQuery.eq('unit_id', user.user_metadata?.unit_id)
