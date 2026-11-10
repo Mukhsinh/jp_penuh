@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
-import { isMedicalUnit } from '@/lib/utils/medical-unit'
+import { isMedicalUnit, isPartialEligibleUnit } from '@/lib/utils/medical-unit'
 import { getTERCategory, getTERRate } from '@/lib/formulas/ter-lookup'
 
 export const maxDuration = 60
@@ -20,7 +20,7 @@ async function batchedIn(
   filterColumn: string,
   filterValues: string[],
   additionalFilters?: (q: any) => any,
-  batchSize: number = 80
+  batchSize: number = 400
 ): Promise<any[]> {
   if (filterValues.length === 0) return []
 
@@ -29,7 +29,7 @@ async function batchedIn(
     batches.push(filterValues.slice(i, i + batchSize))
   }
 
-  const concurrency = 5
+  const concurrency = 2
   const results: any[] = []
 
   for (let i = 0; i < batches.length; i += concurrency) {
@@ -1164,7 +1164,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   if (!allEmployees) return []
 
   // --- Helper: Calculate total score/activity for an employee ---
-  const calcEmployeeTotalScore = (empId: string, isMedicalUnit: boolean, uId?: string) => {
+  const calcEmployeeTotalScore = (empId: string, isMedicalUnit: boolean, uId?: string, unitName?: string) => {
     let rawEmpAssessments = allAssessments?.filter((a: any) => a.employee_id === empId) || []
 
     // Deduplicate main assessments to prevent score inflation from race-condition duplicate inserts
@@ -1336,7 +1336,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       return { indexScore, priorityScore }
     }
 
-    // Check contract status for Medis unit
+    // Check contract status for Medis unit OR partial percentage for KEPERAWATAN, RADIOLOGI, REKAM MEDIK in UMUM
+    const isPartialUnit = isPartialEligibleUnit(uId, unitName) && revenueType === 'umum'
     let isContract = false
     let contractPercentage = 100
 
@@ -1356,9 +1357,18 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
           }
         }
       }
+    } else if (isPartialUnit) {
+      const assPartial = rawEmpAssessments.find((a: any) => a.is_contract === true)
+      if (assPartial) {
+        isContract = true
+        if (assPartial.contract_percentage !== null && assPartial.contract_percentage !== undefined) {
+          contractPercentage = Number(assPartial.contract_percentage)
+        }
+      }
     }
 
-    const contractMultiplier = (isMedicalUnit && isContract) ? (Math.max(0, contractPercentage) / 100) : 1
+    const isMultiplierActive = (isMedicalUnit && isContract) || (isPartialUnit && isContract)
+    const contractMultiplier = isMultiplierActive ? (Math.max(0, contractPercentage) / 100) : 1
 
     const p1Res = calcCategoryScore('P1')
     const p2Res = calcCategoryScore('P2')
@@ -1377,7 +1387,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const total_priority_score = round2(p1_priority + p2_priority + p3_priority)
 
     // Also adjust assessmentDetails scores for indexing indicators if contractMultiplier !== 1
-    if (isMedicalUnit && isContract && contractMultiplier !== 1) {
+    if (isMultiplierActive && contractMultiplier !== 1) {
       for (const d of assessmentDetails) {
         if (!d.is_priority && !d.is_activity) {
           d.score = round2(d.score * contractMultiplier)
@@ -1395,7 +1405,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       const indName = a.m_kpi_indicators?.name || '-'
       const catName = a.m_kpi_indicators?.m_kpi_categories?.category || 'Lainnya'
       const baseScore = parseFloat(a.score) || 0
-      const adjScore = (isMedicalUnit && isContract && contractMultiplier !== 1) ? round2(baseScore * contractMultiplier) : baseScore
+      const adjScore = (isMultiplierActive && contractMultiplier !== 1) ? round2(baseScore * contractMultiplier) : baseScore
       assessmentDetails.push({
         name: indName,
         category: catName,
@@ -1453,7 +1463,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const uId = unitData?.id
     const isMedical = isMedicalUnit(uId, unitData?.name)
 
-    const scores = calcEmployeeTotalScore(emp.id, isMedical, uId)
+    const scores = calcEmployeeTotalScore(emp.id, isMedical, uId, unitData?.name)
 
     employeeScoresMap.set(emp.id, { emp, ...scores })
 
@@ -1727,7 +1737,9 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       tax_status: emp.tax_status || 'TK/0',
       employee_status: (isMedical && data.is_contract)
         ? `Kontrak (${data.contract_percentage}%)`
-        : (emp.employment_status || ((emp.employee_status === 'active' || emp.employee_status === 'ASN') ? 'ASN' : (emp.employee_status || 'BLUD'))),
+        : (isPartialEligibleUnit(uId, unitName) && revenueType === 'umum' && data.is_contract)
+          ? `Sebagian (${data.contract_percentage}%)`
+          : (emp.employment_status || ((emp.employee_status === 'active' || emp.employee_status === 'ASN') ? 'ASN' : (emp.employee_status || 'BLUD'))),
       is_contract: Boolean(data.is_contract),
       contract_percentage: data.contract_percentage !== undefined ? data.contract_percentage : 100,
       tax_type: (emp.tax_type === 'gross' || emp.tax_type === 'Final') ? 'Final' : (emp.tax_type || 'TER'),

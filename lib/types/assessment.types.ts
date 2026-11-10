@@ -14,6 +14,8 @@ export interface Assessment {
   revenue_type?: string | null
   is_contract?: boolean
   contract_percentage?: number
+  is_partial?: boolean
+  partial_percentage?: number
   created_at?: string
   updated_at?: string
 }
@@ -30,6 +32,8 @@ export interface AssessmentStatus {
   completion_percentage: number
   is_contract?: boolean
   contract_percentage?: number
+  is_partial?: boolean
+  partial_percentage?: number
   role?: string
 }
 

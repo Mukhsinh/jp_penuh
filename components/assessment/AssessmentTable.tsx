@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import type { AssessmentStatus } from '@/lib/types/assessment.types'
+import { isPartialEligibleUnit, isMedicalUnit } from '@/lib/utils/medical-unit'
 
 const AssessmentFormDialog = dynamic(() => import('./AssessmentFormDialog'), {
   loading: () => null,
@@ -153,9 +154,15 @@ export default function AssessmentTable({
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         <span>{employee.full_name}</span>
                         {employee.is_contract && (
-                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] py-0 px-1.5 font-normal">
-                            Kontrak ({employee.contract_percentage || 80}%)
-                          </Badge>
+                          revenueType === 'umum' && isPartialEligibleUnit(employee.unit_id, employee.unit_name) ? (
+                            <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300 text-[10px] py-0 px-2 font-semibold">
+                              Sebagian ({employee.contract_percentage || 80}%)
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] py-0 px-1.5 font-normal">
+                              Kontrak ({employee.contract_percentage || 80}%)
+                            </Badge>
+                          )
                         )}
                       </div>
                     </div>

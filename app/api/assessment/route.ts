@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { isMedicalUnit, isPartialEligibleUnit } from '@/lib/utils/medical-unit'
 
 export const dynamic = 'force-dynamic'
 
@@ -191,13 +192,40 @@ async function upsertAssessment(
       .single()
 
     if (insertError) {
-      console.error('Main assessment insert error:', insertError)
-      throw new Error(`Failed to save assessment: ${insertError.message}`)
-    }
-    savedData = data
-    if (existingMap && data?.id) {
-      const mainKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:main`
-      existingMap.set(mainKey, data.id)
+      // Concurrency protection: If another user/thread inserted this record concurrently (23505 unique violation),
+      // gracefully recover by updating the conflicting record instead of failing the request
+      if (insertError.code === '23505' || insertError.message?.includes('duplicate key') || insertError.message?.includes('unique')) {
+        const { data: retryData, error: retryError } = await adminClient
+          .from('t_kpi_assessments')
+          .update(assessmentData)
+          .eq('employee_id', assessment.employee_id)
+          .eq('indicator_id', assessment.indicator_id)
+          .eq('period', assessment.period)
+          .eq('revenue_type', revType)
+          .is('sub_indicator_id', null)
+          .select()
+          .single()
+
+        if (!retryError && retryData) {
+          savedData = retryData
+          if (existingMap) {
+            const mainKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:main`
+            existingMap.set(mainKey, retryData.id)
+          }
+        } else {
+          console.error('Main assessment concurrency update fallback error:', retryError)
+          throw new Error(`Failed to save assessment: ${retryError?.message || insertError.message}`)
+        }
+      } else {
+        console.error('Main assessment insert error:', insertError)
+        throw new Error(`Failed to save assessment: ${insertError.message}`)
+      }
+    } else {
+      savedData = data
+      if (existingMap && data?.id) {
+        const mainKey = `${assessment.employee_id}:${assessment.indicator_id}:${assessment.period}:${revType}:main`
+        existingMap.set(mainKey, data.id)
+      }
     }
   }
 
@@ -276,10 +304,27 @@ async function upsertAssessment(
           .single()
 
         if (subInsertError) {
-          console.error('Sub-assessment insert error:', subInsertError)
-          throw new Error(`Failed to save sub-indicators: ${subInsertError.message}`)
-        }
-        if (newSubRow?.id && existingMap) {
+          // Concurrency protection: If another user/thread inserted this sub-record concurrently,
+          // gracefully update the existing record
+          if (subInsertError.code === '23505' || subInsertError.message?.includes('duplicate key') || subInsertError.message?.includes('unique')) {
+            const { error: retrySubError } = await adminClient
+              .from('t_kpi_assessments')
+              .update(subData)
+              .eq('employee_id', assessment.employee_id)
+              .eq('indicator_id', assessment.indicator_id)
+              .eq('sub_indicator_id', sub.sub_indicator_id)
+              .eq('period', assessment.period)
+              .eq('revenue_type', revType)
+
+            if (retrySubError) {
+              console.error('Sub-assessment concurrency update fallback error:', retrySubError)
+              throw new Error(`Failed to save sub-indicators: ${retrySubError.message}`)
+            }
+          } else {
+            console.error('Sub-assessment insert error:', subInsertError)
+            throw new Error(`Failed to save sub-indicators: ${subInsertError.message}`)
+          }
+        } else if (newSubRow?.id && existingMap) {
           existingMap.set(subKey, newSubRow.id)
         }
       }
@@ -423,18 +468,30 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to fetch assessments: ${fetchErr.message}`)
     }
 
-    // Get employee contract status if available
+    // Get employee contract / partial status if available
     const { data: empRecord } = await adminClient
       .from('m_employees')
-      .select('is_contract, contract_percentage')
+      .select('is_contract, contract_percentage, unit_id')
       .eq('id', employeeId)
       .maybeSingle()
 
+    const isPartialUnit = isPartialEligibleUnit(empRecord?.unit_id) && revenueType === 'umum'
     const contractAssessment = assessments?.find((a: any) => a.is_contract !== null && a.is_contract !== undefined)
-    const isContract = contractAssessment ? Boolean(contractAssessment.is_contract) : Boolean(empRecord?.is_contract)
-    const contractPercentage = contractAssessment && contractAssessment.contract_percentage !== null && contractAssessment.contract_percentage !== undefined
-      ? Number(contractAssessment.contract_percentage)
-      : (empRecord?.contract_percentage !== null && empRecord?.contract_percentage !== undefined ? Number(empRecord.contract_percentage) : 100)
+
+    let isContract = false
+    let contractPercentage = 100
+
+    if (isPartialUnit) {
+      isContract = contractAssessment ? Boolean(contractAssessment.is_contract) : false
+      contractPercentage = contractAssessment && contractAssessment.contract_percentage !== null && contractAssessment.contract_percentage !== undefined
+        ? Number(contractAssessment.contract_percentage)
+        : 100
+    } else {
+      isContract = contractAssessment ? Boolean(contractAssessment.is_contract) : Boolean(empRecord?.is_contract)
+      contractPercentage = contractAssessment && contractAssessment.contract_percentage !== null && contractAssessment.contract_percentage !== undefined
+        ? Number(contractAssessment.contract_percentage)
+        : (empRecord?.contract_percentage !== null && empRecord?.contract_percentage !== undefined ? Number(empRecord.contract_percentage) : 100)
+    }
 
     return NextResponse.json({
       assessments: assessments || [],
@@ -678,12 +735,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update employee contract status if specified in assessment payload
+    // Update employee contract / partial status if specified in assessment payload
     for (const empId of uniqueEmpIds) {
       const itemWithContract = itemsToProcess.find((i: any) => i.employee_id === empId && i.is_contract !== undefined) || (rawBody.employee_id === empId ? rawBody : null)
       if (itemWithContract && itemWithContract.is_contract !== undefined) {
         try {
-          // Sync across all assessment records for this employee & period
+          const empRec = empUnitMap.get(empId)
+          const unitData = Array.isArray(empRec?.m_units) ? empRec.m_units[0] : empRec?.m_units
+          const isMedical = isMedicalUnit(empRec?.unit_id, unitData?.name)
+          const targetRev = itemsToProcess[0]?.revenue_type || 'bpjs'
+
+          // Sync across assessment records for this employee, period, and revenue_type
           await adminClient
             .from('t_kpi_assessments')
             .update({
@@ -692,15 +754,19 @@ export async function POST(request: NextRequest) {
             })
             .eq('employee_id', empId)
             .eq('period', samplePeriod)
+            .eq('revenue_type', targetRev)
 
-          // Also sync to employee master
-          await adminClient
-            .from('m_employees')
-            .update({
-              is_contract: Boolean(itemWithContract.is_contract),
-              contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
-            })
-            .eq('id', empId)
+          // Only sync to master m_employees if it is the MEDIS unit
+          // Units like KEPERAWATAN, RADIOLOGI, REKAM MEDIK in UMUM must NOT touch master m_employees!
+          if (isMedical) {
+            await adminClient
+              .from('m_employees')
+              .update({
+                is_contract: Boolean(itemWithContract.is_contract),
+                contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
+              })
+              .eq('id', empId)
+          }
         } catch (cErr) {
           console.warn('Failed to sync contract status:', cErr)
         }

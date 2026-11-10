@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { isMedicalUnit, isPartialEligibleUnit } from '@/lib/utils/medical-unit'
+import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
+import { getOrSetCache } from '@/lib/utils/server-cache'
 
 /**
  * Paginated fetch to bypass Supabase's default 1000-row limit.
@@ -41,8 +44,6 @@ interface AssessmentStatus {
   completion_percentage: number
   role?: string
 }
-
-import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 
 export async function GET(request: NextRequest) {
   try {
@@ -106,12 +107,13 @@ export async function GET(request: NextRequest) {
     const revenueType = searchParams.get('revenue_type') || 'bpjs'
     let employeesData: AssessmentStatus[] = []
 
-    // 1. Get SUPERADMIN unit IDs to exclude
-    const { data: rawUnits } = await adminClient
-      .from('m_units')
-      .select('id, code, name')
+    // 1. Get SUPERADMIN unit IDs to exclude (cached for 2 min to reduce DB load)
+    const rawUnits = await getOrSetCache('m_units:all', 120_000, async () => {
+      const { data } = await adminClient.from('m_units').select('id, code, name')
+      return data || []
+    })
 
-    const adminUnitIds = (rawUnits || [])
+    const adminUnitIds = rawUnits
       .filter((u: any) => {
         const code = String(u.code || '').toUpperCase()
         const name = String(u.name || '').toUpperCase()
@@ -181,36 +183,45 @@ export async function GET(request: NextRequest) {
     }))
 
     if (!directErr && directEmps) {
-      // Step 1: Preload kpi unit schemas and active categories
-      const { data: unitsData } = await adminClient.from('m_units').select('id, kpi_schema_mode')
-      const unitSchemaMap = new Map((unitsData || []).map(u => [u.id, u.kpi_schema_mode]))
+      // Step 1: Preload kpi unit schemas and active categories (cached for 2 min)
+      const unitsData = await getOrSetCache('m_units:schemas', 120_000, async () => {
+        const { data } = await adminClient.from('m_units').select('id, kpi_schema_mode')
+        return data || []
+      })
+      const unitSchemaMap = new Map((unitsData || []).map((u: any) => [u.id, u.kpi_schema_mode]))
 
-      const { data: categoriesData } = await adminClient
-        .from('m_kpi_categories')
-        .select('id, unit_id, revenue_type')
-        .eq('is_active', true)
+      const categoriesData = await getOrSetCache('m_kpi_categories:active', 120_000, async () => {
+        const { data } = await adminClient
+          .from('m_kpi_categories')
+          .select('id, unit_id, revenue_type')
+          .eq('is_active', true)
+        return data || []
+      })
 
       // Filter categories according to the schema logic matching the assessment form
-      const validCategories = (categoriesData || []).filter(c => {
+      const validCategories = (categoriesData || []).filter((c: any) => {
         const schemaMode = unitSchemaMap.get(c.unit_id)
         if (schemaMode === 'different') {
           return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
         }
         return c.revenue_type === 'bpjs' || c.revenue_type === 'all' || !c.revenue_type
       })
-      const validCategoryIds = validCategories.map(c => c.id)
-      const catToUnitMap = new Map(validCategories.map(c => [c.id, c.unit_id]))
+      const validCategoryIds = validCategories.map((c: any) => c.id)
+      const catToUnitMap = new Map(validCategories.map((c: any) => [c.id, c.unit_id]))
 
       let indicatorCountMap: Record<string, number> = {}
       let validIndicators: any[] = []
       if (validCategoryIds.length > 0) {
-        const { data } = await adminClient
-          .from('m_kpi_indicators')
-          .select('id, category_id')
-          .eq('is_active', true)
-          .in('category_id', validCategoryIds)
+        const allActiveIndicators = await getOrSetCache('m_kpi_indicators:active', 120_000, async () => {
+          const { data } = await adminClient
+            .from('m_kpi_indicators')
+            .select('id, category_id')
+            .eq('is_active', true)
+          return data || []
+        })
 
-        validIndicators = data || []
+        const validCatSet = new Set(validCategoryIds)
+        validIndicators = allActiveIndicators.filter((ind: any) => validCatSet.has(ind.category_id))
         validIndicators.forEach((ind: any) => {
           const uId = catToUnitMap.get(ind.category_id) as string
           if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
@@ -283,9 +294,23 @@ export async function GET(request: NextRequest) {
         }
         const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
 
+        const isMed = isMedicalUnit(emp.unit_id, (emp.m_units as any)?.name)
+        const isPartialUnit = isPartialEligibleUnit(emp.unit_id, (emp.m_units as any)?.name) && revenueType === 'umum'
         const cStatus = contractStatusMap.get(emp.id)
-        const isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
-        const contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+
+        let isContract = false
+        let contractPercentage = 100
+
+        if (isPartialUnit) {
+          isContract = cStatus ? cStatus.is_contract : false
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : 100
+        } else if (isMed) {
+          isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+        } else {
+          isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+        }
 
         return {
           employee_id: emp.id,
@@ -299,23 +324,24 @@ export async function GET(request: NextRequest) {
           completion_percentage: completionPct,
           is_contract: isContract,
           contract_percentage: contractPercentage,
+          is_partial: isPartialUnit ? isContract : false,
+          partial_percentage: isPartialUnit ? contractPercentage : 100,
           role: emp.role
         }
       })
-
-      if (status && ['Belum Dinilai', 'Sebagian', 'Selesai'].includes(status)) {
-        employeesData = employeesData.filter(e => e.status === status)
-      }
     }
 
-    // Secondary filter: Exclude superadmins AND employees from SUPERADMIN unit
-    const { data: adminUnitInfo } = await adminClient
-      .from('m_units')
-      .select('id, name')
-      .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
-      .maybeSingle()
+    // Secondary filter: Exclude superadmins AND employees from SUPERADMIN unit (cached for 2 min)
+    const adminUnitInfo = await getOrSetCache('m_units:admin_info', 120_000, async () => {
+      const { data } = await adminClient
+        .from('m_units')
+        .select('id, name')
+        .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
+        .maybeSingle()
+      return data || null
+    })
 
-    const filteredResults = employeesData.filter((emp: any) => {
+    const filteredEmployees = employeesData.filter((emp: any) => {
       if (emp.role === 'superadmin') return false
       // Exclude SUPERADMIN unit by id or name
       if (adminUnitInfo && emp.unit_id === adminUnitInfo.id) return false
@@ -323,7 +349,27 @@ export async function GET(request: NextRequest) {
       return true
     })
 
-    return NextResponse.json({ employees: filteredResults })
+    // Calculate summary statistics matching /api/assessment/status to avoid duplicate queries
+    const summary = {
+      total_employees: filteredEmployees.length,
+      completed: filteredEmployees.filter(s => s.status === 'Selesai').length,
+      started: filteredEmployees.filter(s => s.assessed_indicators > 0).length,
+      partial: filteredEmployees.filter(s => s.status === 'Sebagian').length,
+      not_started: filteredEmployees.filter(s => s.assessed_indicators === 0).length,
+      completion_rate: filteredEmployees.length > 0
+        ? Math.round((filteredEmployees.filter(s => s.status === 'Selesai').length / filteredEmployees.length) * 100)
+        : 0
+    }
+
+    let finalEmployees = filteredEmployees
+    if (status && ['Belum Dinilai', 'Sebagian', 'Selesai'].includes(status)) {
+      finalEmployees = finalEmployees.filter(e => e.status === status)
+    }
+
+    return NextResponse.json({
+      employees: finalEmployees,
+      summary
+    })
   } catch (error) {
     console.error('Assessment employees GET error:', error)
     return NextResponse.json(

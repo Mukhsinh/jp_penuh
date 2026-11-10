@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
-import { isMedicalUnit } from '@/lib/utils/medical-unit'
+import { isMedicalUnit, isPartialEligibleUnit } from '@/lib/utils/medical-unit'
 import { calculateCategoryScore, calculateTotalScore } from '@/lib/utils/score-calculator'
 
 async function getUserEmployee(adminClient: any, user: any) {
@@ -417,8 +417,11 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const topPerformers = Array.from(employeeScores.entries())
     .map(([employeeId, data]: [string, any]) => {
       const isMedical = isMedicalUnit(null, data.unit_name);
+      const isPartial = isPartialEligibleUnit(null, data.unit_name) && revenueType === 'umum';
       const isContract = Boolean(data.is_contract);
-      const contractMultiplier = (isMedical && isContract) ? (Math.max(0, Number(data.contract_percentage) || 100) / 100) : 1;
+      const contractMultiplier = (isMedical && isContract)
+        ? (Math.max(0, Number(data.contract_percentage) || 100) / 100)
+        : ((isPartial && isContract) ? (Math.max(0, Number(data.contract_percentage) || 100) / 100) : 1);
 
       const p1 = round2(calculateCategoryScore(data.p1_scores, isMedical) * contractMultiplier);
       const p2 = round2(calculateCategoryScore(data.p2_scores, isMedical) * contractMultiplier);

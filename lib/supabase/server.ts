@@ -32,19 +32,29 @@ export async function createClient() {
 }
 
 /**
- * Create a Supabase admin client for server-side operations
- * Uses service role key for admin operations (bypasses RLS)
- * ONLY use this for admin operations that require elevated privileges
+ * Global singleton instance of Supabase admin client for server-side operations.
+ * Reusing this instance prevents socket exhaustion, reduces memory allocation,
+ * and maintains keep-alive HTTP connections during high multi-user concurrent traffic.
+ */
+let cachedAdminClient: ReturnType<typeof createSupabaseClient> | null = null
+
+/**
+ * Create or reuse a Supabase admin client for server-side operations.
+ * Uses service role key for admin operations (bypasses RLS).
+ * ONLY use this for admin operations that require elevated privileges.
  */
 export async function createAdminClient() {
-  return createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
+  if (!cachedAdminClient) {
+    cachedAdminClient = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
       }
-    }
-  )
+    )
+  }
+  return cachedAdminClient
 }

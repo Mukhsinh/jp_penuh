@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { DashboardService } from '@/lib/services/dashboard.service'
+import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 
 export async function GET(request: Request) {
   try {
@@ -8,8 +9,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
 
-    // Get current user using getUser()
-    const { data: { user } } = await supabase.auth.getUser()
+    // Get current user robustly without hitting Supabase Auth rate limits
+    const user = await getAuthenticatedUser(supabase, request)
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }

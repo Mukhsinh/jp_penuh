@@ -22,7 +22,7 @@ import { Progress } from '@/components/ui/progress'
 import type { AssessmentStatus } from '@/lib/types/assessment.types'
 import type { ScoringCriterion } from '@/lib/types/kpi.types'
 import { formatDecimal } from '@/lib/utils/format'
-import { isMedicalUnit as checkMedicalUnit } from '@/lib/utils/medical-unit'
+import { isMedicalUnit as checkMedicalUnit, isPartialEligibleUnit } from '@/lib/utils/medical-unit'
 
 interface KPISubIndicator {
   id: string
@@ -96,6 +96,8 @@ interface AssessmentFormDialogProps {
   onSaved: () => void
 }
 
+const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
+
 export default function AssessmentFormDialog({
   open,
   onClose,
@@ -113,8 +115,11 @@ export default function AssessmentFormDialog({
   const [error, setError] = useState<string | null>(null)
 
   const isMedicalUnit = checkMedicalUnit(employee?.unit_id, employee?.unit_name)
+  const isPartialUnit = isPartialEligibleUnit(employee?.unit_id, employee?.unit_name)
 
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>(revenueType)
+  const showPartialFeature = isPartialUnit && activeRevenueType === 'umum'
+
   const [kpiSchemaMode, setKpiSchemaMode] = useState<'same' | 'different'>('same')
   const [applyToUmum, setApplyToUmum] = useState<boolean>(false)
   const [isContract, setIsContract] = useState<boolean>(Boolean(employee?.is_contract))
@@ -123,6 +128,8 @@ export default function AssessmentFormDialog({
       ? Number(employee.contract_percentage)
       : 80
   )
+  const [isPartial, setIsPartial] = useState<boolean>(false)
+  const [partialPercentage, setPartialPercentage] = useState<number>(80)
 
   // Sync active revenue type when prop changes or dialog opens
   useEffect(() => {
@@ -137,8 +144,19 @@ export default function AssessmentFormDialog({
           ? Number(employee.contract_percentage)
           : 80
       )
+      const currentRev = revenueType || activeRevenueType
+      const isEligible = isPartialEligibleUnit(employee?.unit_id, employee?.unit_name) && currentRev === 'umum'
+      if (isEligible) {
+        const hasSavedPartial = Boolean(employee?.is_partial || (employee?.is_contract && !isMedicalUnit))
+        setIsPartial(hasSavedPartial)
+        const savedPct = employee?.partial_percentage ?? (employee?.is_contract && !isMedicalUnit ? employee?.contract_percentage : 80)
+        setPartialPercentage(Number(savedPct || 80))
+      } else {
+        setIsPartial(false)
+        setPartialPercentage(80)
+      }
     }
-  }, [revenueType, open, employee])
+  }, [revenueType, open, employee, isMedicalUnit])
 
   // Fetch unit's KPI schema mode on mount/open
   useEffect(() => {
@@ -224,6 +242,29 @@ export default function AssessmentFormDialog({
                 setContractPercentage(Number(employee.contract_percentage))
               }
             }
+          }
+        } else if (isPartialUnit && revenueType === 'umum') {
+          // Load partial percentage for KEPERAWATAN, RADIOLOGI, and REKAM MEDIK in Pendapatan UMUM
+          const partialItem = data.assessments?.find((item: any) => item.is_contract !== null && item.is_contract !== undefined)
+          if (partialItem) {
+            setIsPartial(Boolean(partialItem.is_contract))
+            if (partialItem.contract_percentage !== null && partialItem.contract_percentage !== undefined) {
+              setPartialPercentage(Number(partialItem.contract_percentage))
+            }
+          } else if (data.is_contract !== undefined && data.is_contract !== null && data.is_contract === true) {
+            setIsPartial(Boolean(data.is_contract))
+            if (data.contract_percentage !== null && data.contract_percentage !== undefined) {
+              setPartialPercentage(Number(data.contract_percentage))
+            }
+          } else if (employee?.is_partial || (employee?.is_contract && !isMedicalUnit)) {
+            setIsPartial(true)
+            const savedPct = employee?.partial_percentage ?? employee?.contract_percentage
+            if (savedPct !== null && savedPct !== undefined) {
+              setPartialPercentage(Number(savedPct))
+            }
+          } else {
+            setIsPartial(false)
+            setPartialPercentage(80)
           }
         }
 
@@ -518,8 +559,10 @@ export default function AssessmentFormDialog({
             score: assessment.score,
             revenue_type: activeRevenueType,
             sub_assessments: fullSubAssessments,
-            is_contract: isMedicalUnit ? isContract : false,
-            contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100
+            is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
+            contract_percentage: isMedicalUnit
+              ? (isContract ? Number(contractPercentage || 100) : 100)
+              : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100)
           }
         })
       )
@@ -532,8 +575,10 @@ export default function AssessmentFormDialog({
         body: JSON.stringify({
           assessments: batchData,
           apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
-          is_contract: isMedicalUnit ? isContract : false,
-          contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
+          is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
+          contract_percentage: isMedicalUnit
+            ? (isContract ? Number(contractPercentage || 100) : 100)
+            : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
           employee_id: employee.employee_id
         })
       })
@@ -663,8 +708,10 @@ export default function AssessmentFormDialog({
                 score: assessment.score,
                 sub_assessments: fullSubAssessments,
                 revenue_type: activeRevenueType,
-                is_contract: isMedicalUnit ? isContract : false,
-                contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
+                is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
+                contract_percentage: isMedicalUnit
+                  ? (isContract ? Number(contractPercentage || 100) : 100)
+                  : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
                 assessor_id: '' // API will handle this from session
               }
             })
@@ -676,8 +723,10 @@ export default function AssessmentFormDialog({
             body: JSON.stringify({
               assessments: batchData,
               apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
-              is_contract: isMedicalUnit ? isContract : false,
-              contract_percentage: isMedicalUnit && isContract ? Number(contractPercentage || 100) : 100,
+              is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
+              contract_percentage: isMedicalUnit
+                ? (isContract ? Number(contractPercentage || 100) : 100)
+                : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
               employee_id: employee.employee_id
             })
           })
@@ -903,9 +952,13 @@ export default function AssessmentFormDialog({
               }
             }
 
+            const isPartialActive = showPartialFeature && isPartial;
+            const effectiveMultiplier = isMedicalUnit && isContract
+              ? (Math.max(0, Number(contractPercentage) || 0) / 100)
+              : (isPartialActive ? (Math.max(0, Number(partialPercentage) || 0) / 100) : 1);
+
             const rawPoinAkhir = round2(isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir);
-            const contractMultiplier = (isMedicalUnit && isContract) ? (Math.max(0, Number(contractPercentage) || 0) / 100) : 1;
-            const poinAkhir = round2(rawPoinAkhir * (isMedicalUnit && isContract ? contractMultiplier : 1));
+            const poinAkhir = round2(rawPoinAkhir * effectiveMultiplier);
             totalSkorIndeks += poinAkhir;
 
             return (
@@ -925,6 +978,8 @@ export default function AssessmentFormDialog({
                   <div className="text-[10px] text-gray-400">
                     {isMedicalUnit && isContract ? (
                       <span className="text-amber-700 font-medium">Asli: {formatDecimal(rawPoinAkhir, 2)} (x {contractPercentage}%)</span>
+                    ) : isPartialActive ? (
+                      <span className="text-amber-700 font-medium">Asli: {formatDecimal(rawPoinAkhir, 2)} (x {partialPercentage}%)</span>
                     ) : totalTargetKategori > 0
                       ? `${formatDecimal(totalRealisasiKategori, 2)} / ${formatDecimal(totalTargetKategori, 2)}`
                       : `${formatDecimal(totalRealisasiKategori, 2)} Poin`}
@@ -973,6 +1028,11 @@ export default function AssessmentFormDialog({
                   {isMedicalUnit && isContract && (
                     <div className="text-[10px] text-amber-700 font-semibold mt-0.5">
                       Status Kontrak ({contractPercentage}%)
+                    </div>
+                  )}
+                  {showPartialFeature && isPartial && (
+                    <div className="text-[10px] text-amber-700 font-semibold mt-0.5">
+                      Sebagian ({partialPercentage}%)
                     </div>
                   )}
                 </CardContent>
@@ -1073,6 +1133,9 @@ export default function AssessmentFormDialog({
                         const catWeight = category.weight_percentage || 0
                         displayedScore = score * (indicator.weight_percentage / 100) * (catWeight / 100)
                       }
+                      if (showPartialFeature && isPartial) {
+                        displayedScore = round2(displayedScore * (Math.max(0, Number(partialPercentage) || 0) / 100))
+                      }
 
                       return (
                         <div key={indicator.id} className="border rounded-lg p-4 space-y-4">
@@ -1143,11 +1206,18 @@ export default function AssessmentFormDialog({
                             </div>
 
                             <div>
-                              <Label className="text-sm font-medium">Skor Dasar</Label>
-                              <div className="mt-1">
+                              <Label className="text-sm font-medium">
+                                {showPartialFeature && isPartial ? 'Skor Sebagian' : 'Skor Dasar'}
+                              </Label>
+                              <div className="mt-1 flex items-center gap-1.5">
                                 <Badge className={getAchievementBadge(displayedScore)}>
                                   {displayedScore.toFixed(2)}
                                 </Badge>
+                                {showPartialFeature && isPartial && (
+                                  <span className="text-[10px] text-amber-700 font-semibold">
+                                    (x{partialPercentage}%)
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1433,6 +1503,101 @@ export default function AssessmentFormDialog({
             {isContract && (
               <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-400 text-xs font-semibold">
                 Pengali Aktif: {((Number(contractPercentage) || 0) / 100).toFixed(2)}x
+              </Badge>
+            )}
+          </div>
+        )}
+
+        {/* Fitur Sebagian (Khusus Unit KEPERAWATAN, RADIOLOGI, dan REKAM MEDIK pada Pendapatan UMUM) */}
+        {showPartialFeature && (
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-amber-50 via-orange-50/60 to-amber-50 border-2 border-amber-300 rounded-xl shadow-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="statusSebagianCheckbox"
+                  checked={isPartial}
+                  onChange={(e) => setIsPartial(e.target.checked)}
+                  disabled={isApproved || saving}
+                  className="h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                />
+                <label
+                  htmlFor="statusSebagianCheckbox"
+                  className="cursor-pointer select-none font-bold text-xs text-amber-950"
+                >
+                  Sebagian
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={isPartial ? "default" : "outline"}
+                  onClick={() => setIsPartial(!isPartial)}
+                  disabled={isApproved || saving}
+                  className={cn(
+                    "h-7 text-xs px-2.5 font-semibold transition-all",
+                    isPartial
+                      ? "bg-amber-600 hover:bg-amber-700 text-white border-amber-600 shadow-sm"
+                      : "bg-white hover:bg-amber-50 text-amber-900 border-amber-300"
+                  )}
+                >
+                  {isPartial ? "Aktif (Sebagian)" : "Pilih Sebagian"}
+                </Button>
+              </div>
+
+              {isPartial && (
+                <div className="flex flex-wrap items-center gap-2 pl-3 border-l border-amber-300">
+                  <span className="text-xs font-semibold text-amber-900">
+                    Persentase:
+                  </span>
+                  <div className="relative flex items-center">
+                    <Input
+                      id="partialPercentageInput"
+                      type="number"
+                      step="any"
+                      min="0"
+                      max="100"
+                      value={partialPercentage === 0 ? '' : partialPercentage}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value)
+                        setPartialPercentage(isNaN(val) ? 0 : val)
+                      }}
+                      disabled={isApproved || saving}
+                      placeholder="Contoh: 50"
+                      className="h-7 w-20 text-xs bg-white text-center font-bold pr-5 border-amber-400 focus:border-amber-600 focus:ring-amber-500 shadow-sm"
+                    />
+                    <span className="absolute right-2 text-xs font-bold text-gray-500 pointer-events-none">%</span>
+                  </div>
+
+                  {/* Preset quick buttons */}
+                  <div className="flex items-center gap-1">
+                    {[25, 50, 75, 80].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setPartialPercentage(preset)}
+                        disabled={isApproved || saving}
+                        className={cn(
+                          "text-[10px] px-1.5 py-0.5 rounded border font-medium transition-all",
+                          partialPercentage === preset
+                            ? "bg-amber-600 text-white border-amber-600 font-bold"
+                            : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100"
+                        )}
+                      >
+                        {preset}%
+                      </button>
+                    ))}
+                  </div>
+
+                  <span className="text-[11px] text-amber-800 font-medium italic">
+                    (Skor pegawai otomatis dikalikan {partialPercentage}%)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {isPartial && (
+              <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-400 text-xs font-bold">
+                Pengali Aktif: {((Number(partialPercentage) || 0) / 100).toFixed(2)}x
               </Badge>
             )}
           </div>

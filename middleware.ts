@@ -272,13 +272,13 @@ export async function middleware(request: NextRequest) {
             loginUrl.searchParams.set('error', 'user_not_found')
             return NextResponse.redirect(loginUrl)
           }
+        } else {
+          employeeData = {
+            role: (employee.role || 'employee') as Role,
+            is_active: !!employee.is_active
+          }
+          employeeCache.set(session.user.id, employeeData)
         }
-
-        employeeData = {
-          role: (employee.role || 'employee') as Role,
-          is_active: !!employee.is_active
-        }
-        employeeCache.set(session.user.id, employeeData)
       }
     }
 

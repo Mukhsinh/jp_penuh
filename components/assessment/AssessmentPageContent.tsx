@@ -169,6 +169,9 @@ export default function AssessmentPageContent({
       if (response.ok) {
         const data = await response.json()
         setEmployees(data.employees || [])
+        if (data.summary) {
+          setSummary(data.summary)
+        }
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Gagal memuat data' }))
 
@@ -260,13 +263,11 @@ export default function AssessmentPageContent({
     loadInitialData()
   }, [])
 
-  // Load data when period or unit filter changes - stagger calls to avoid auth rate limit
+  // Load data when period or unit filter changes - loadEmployees delivers both employees & summary in 1 query
   useEffect(() => {
     if (selectedPeriod && selectedPeriod !== 'null' && selectedPeriod !== 'undefined') {
       const loadData = async () => {
         await loadEmployees()
-        // Small delay to avoid concurrent auth.getUser() calls hitting rate limit
-        await loadSummary()
         await loadPeriodApproval(selectedPeriod)
       }
       loadData()
@@ -278,7 +279,6 @@ export default function AssessmentPageContent({
   // Handle refresh
   const handleRefresh = () => {
     loadEmployees()
-    loadSummary()
     loadPeriodApproval()
   }
 
