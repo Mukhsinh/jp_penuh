@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { useSettings } from '@/lib/contexts/settings-context'
 import {
   Select,
   SelectContent,
@@ -362,6 +363,7 @@ function KPIAchievementTable({ data }: { data: any[] }) {
 // Main Page
 // ────────────────────────────────────────────────────────────────
 export default function ReportsPage() {
+  const { settings } = useSettings()
   const [selectedReport, setSelectedReport] = useState<ReportType | null>(null)
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedUnit, setSelectedUnit] = useState('all')
@@ -477,14 +479,32 @@ export default function ReportsPage() {
           detailLevel,
         }),
       })
-      const data = await response.json()
 
       if (!response.ok) {
         if (response.status === 401) {
           window.location.href = '/login?error=session_expired'
           return
         }
-        throw new Error(data.error || 'Gagal membuat laporan')
+        let errMsg = 'Gagal membuat laporan'
+        try {
+          const errData = await response.json()
+          errMsg = errData.error || errData.message || errMsg
+        } catch {
+          const text = await response.text().catch(() => '')
+          if (response.status === 504) {
+            errMsg = 'Permintaan waktu habis (Gateway Timeout). Data sedang diproses di server. Silakan coba klik Buat Laporan kembali.'
+          } else {
+            errMsg = `Terjadi kesalahan server (${response.status}): ${text.slice(0, 120) || 'Gagal memproses laporan'}`
+          }
+        }
+        throw new Error(errMsg)
+      }
+
+      let data: any
+      try {
+        data = await response.json()
+      } catch {
+        throw new Error('Gagal memproses respon server (Format JSON tidak valid).')
       }
 
       // Capture summary from API
@@ -551,7 +571,16 @@ export default function ReportsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reportType: selectedReport, period: selectedPeriod, format, data: reportData, revenueType: selectedRevenueType }),
       })
-      if (!response.ok) throw new Error('Ekspor gagal')
+      if (!response.ok) {
+        let errMsg = 'Ekspor gagal'
+        try {
+          const errData = await response.json()
+          errMsg = errData.error || errMsg
+        } catch {
+          errMsg = `Ekspor gagal (Status ${response.status})`
+        }
+        throw new Error(errMsg)
+      }
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
       const a = Object.assign(document.createElement('a'), {
@@ -824,23 +853,103 @@ export default function ReportsPage() {
         </Card>
       )}
 
-      {/* Report Preview */}
+      {/* Report Preview with Official Kop and Footer */}
       {reportData && (
-        <Card className="p-6">
-          <h2 className="text-xl font-semibold mb-4">Pratinjau Laporan</h2>
-
-          <div className="overflow-x-auto">
-            {(selectedReport === 'incentive' || selectedReport === 'employee-slip') ? (
-              <IncentiveTable data={reportData} />
-            ) : selectedReport === 'unit-comparison' ? (
-              <UnitComparisonTable data={reportData} />
-            ) : (
-              <KPIAchievementTable data={reportData} />
-            )}
+        <Card className="p-6 space-y-6">
+          <div className="flex justify-between items-center pb-2 border-b">
+            <h2 className="text-xl font-semibold text-gray-800">Pratinjau Laporan</h2>
+            <Badge variant="outline" className="text-xs">
+              {reportData.length} Data Pegawai
+            </Badge>
           </div>
-        </Card >
-      )
-      }
+
+          {/* Official Kop Surat */}
+          <div className="bg-white p-6 rounded-lg border border-gray-100 shadow-sm">
+            <div className="flex items-center gap-6 pb-4">
+              {settings?.company_info?.logo ? (
+                <img
+                  src={settings.company_info.logo}
+                  alt="Logo RS"
+                  className="w-20 h-20 object-contain flex-shrink-0"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xl flex-shrink-0">
+                  <Building2 className="w-8 h-8" />
+                </div>
+              )}
+              <div className="flex-1 text-center pr-6">
+                <h1 className="text-xl md:text-2xl font-bold tracking-wide text-gray-900 uppercase">
+                  {settings?.company_info?.name || 'RS MAYJEN HA THALIB'}
+                </h1>
+                <p className="text-xs md:text-sm text-gray-600 mt-1">
+                  {settings?.company_info?.address?.trim() || 'Kota Sungai Penuh, Jambi'}
+                </p>
+                {(settings?.company_info?.phone || settings?.company_info?.email) && (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {[
+                      settings?.company_info?.phone ? `Telp: ${settings.company_info.phone}` : null,
+                      settings?.company_info?.email ? `Email: ${settings.company_info.email}` : null
+                    ].filter(Boolean).join(' | ')}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Double Border Divider (Standard Kop Surat) */}
+            <div className="border-t-2 border-gray-900 mb-0.5" />
+            <div className="border-t border-gray-900 mb-4" />
+
+            {/* Document Title & Meta */}
+            <div className="text-center my-3">
+              <h3 className="text-base md:text-lg font-bold text-gray-900 uppercase tracking-wider">
+                {selectedReport === 'incentive'
+                  ? 'LAPORAN REKAPITULASI PEMBAYARAN JASPEL'
+                  : selectedReport === 'kpi-achievement'
+                  ? 'LAPORAN PENCAPAIAN KINERJA PEGAWAI (KPI)'
+                  : selectedReport === 'unit-comparison'
+                  ? 'LAPORAN PERBANDINGAN PERFORMA UNIT'
+                  : 'SLIP GAJI DAN INSENTIF PEGAWAI'}
+              </h3>
+              <p className="text-xs md:text-sm text-gray-600 mt-1">
+                <span className="font-medium">Periode:</span> {selectedPeriod}
+                <span className="mx-2">|</span>
+                <span className="font-medium">Unit Kerja:</span> {selectedUnit === 'all' ? 'Semua Unit' : availableUnits.find(u => u.id === selectedUnit)?.name || selectedUnit}
+                <span className="mx-2">|</span>
+                <span className="font-medium">Pendapatan:</span> {selectedRevenueType === 'bpjs' ? 'BPJS Kesehatan Only' : selectedRevenueType === 'umum' ? 'Pendapatan UMUM Only' : 'Konsolidasi (Gabungan BPJS & UMUM)'}
+              </p>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto mt-4">
+              {(selectedReport === 'incentive' || selectedReport === 'employee-slip') ? (
+                <IncentiveTable data={reportData} />
+              ) : selectedReport === 'unit-comparison' ? (
+                <UnitComparisonTable data={reportData} />
+              ) : (
+                <KPIAchievementTable data={reportData} />
+              )}
+            </div>
+
+            {/* Official Report Footer */}
+            <div className="mt-8 pt-4 border-t border-gray-200 flex flex-col md:flex-row justify-between items-center gap-2 text-xs text-gray-500">
+              <div>
+                <span>Dicetak pada: </span>
+                <span className="font-medium">{new Date().toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' })}</span>
+              </div>
+              <div className="text-center font-medium text-gray-600 italic">
+                {typeof settings?.footer === 'object' && settings.footer?.text
+                  ? settings.footer.text
+                  : (typeof settings?.footer === 'string'
+                    ? settings.footer
+                    : 'PINTAR JP@2026. Mukhsin Hadi. All Right Reserved')}
+              </div>
+              <div className="text-gray-400">
+                Total: {reportData.length} Pegawai
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
     </div >
   )
 }

@@ -148,8 +148,8 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
 
   // Build Kop Surat
   const kopSurat = [
-    [companyInfo.name.toUpperCase()],
-    [`${companyInfo.address}`],
+    [(companyInfo.name || 'RS MAYJEN HA THALIB').toUpperCase()],
+    [companyInfo.address?.trim() || 'Kota Sungai Penuh, Jambi'],
     [
       [
         companyInfo.phone ? `Telp: ${companyInfo.phone}` : null,
@@ -272,8 +272,8 @@ export async function exportToExcelFile({
 
   // Build Kop Surat
   const kopSurat = [
-    [companyInfo.name.toUpperCase()],
-    [`${companyInfo.address}`],
+    [(companyInfo.name || 'RS MAYJEN HA THALIB').toUpperCase()],
+    [companyInfo.address?.trim() || 'Kota Sungai Penuh, Jambi'],
     [
       [
         companyInfo.phone ? `Telp: ${companyInfo.phone}` : null,

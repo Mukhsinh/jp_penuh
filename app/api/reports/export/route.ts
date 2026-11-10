@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { exportToExcel } from '@/lib/export/excel-export'
 import { exportToPDF } from '@/lib/export/pdf-export'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 /**
  * Export reports to Excel or PDF
  * Precision: 2 decimals in PDF and Excel

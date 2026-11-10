@@ -3,14 +3,14 @@
   "framework": "nextjs",
   "regions": ["sin1"],
   "functions": {
-    "app/api/**/*.ts": {
-      "maxDuration": 10
-    },
     "app/api/reports/**/*.ts": {
+      "maxDuration": 60
+    },
+    "app/api/**/*.ts": {
       "maxDuration": 30
     },
     "app/api/dashboard/**/*.ts": {
-      "maxDuration": 5
+      "maxDuration": 15
     }
   },
   "headers": [

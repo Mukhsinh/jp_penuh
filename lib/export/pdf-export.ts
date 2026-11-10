@@ -74,6 +74,23 @@ interface ReportExportOptions {
   revenueType?: string
 }
 
+// In-memory cache for downloaded logo to avoid redundant network fetches in loops
+let cachedPdfLogo: { url: string; buffer: Uint8Array; format: string } | null = null
+
+async function getLogoBufferForPdf(url: string) {
+  if (cachedPdfLogo && cachedPdfLogo.url === url) {
+    return cachedPdfLogo
+  }
+  const imgRes = await fetch(url)
+  const arrayBuffer = await imgRes.arrayBuffer()
+  let format = 'PNG'
+  if (url.toLowerCase().includes('.jpg') || url.toLowerCase().includes('.jpeg')) {
+    format = 'JPEG'
+  }
+  cachedPdfLogo = { url, buffer: new Uint8Array(arrayBuffer), format }
+  return cachedPdfLogo
+}
+
 /**
  * Helper to add professional Kop Surat (Header) to PDF
  */
@@ -85,13 +102,8 @@ async function addKopSurat(doc: jsPDF, companyInfo: any) {
       if (companyInfo.logo.startsWith('data:image')) {
         doc.addImage(companyInfo.logo, 'PNG', 15, 8, 22, 22)
       } else if (companyInfo.logo.startsWith('http')) {
-        const imgRes = await fetch(companyInfo.logo);
-        const arrayBuffer = await imgRes.arrayBuffer();
-        let format = 'PNG';
-        if (companyInfo.logo.toLowerCase().includes('.jpg') || companyInfo.logo.toLowerCase().includes('.jpeg')) {
-          format = 'JPEG';
-        }
-        doc.addImage(new Uint8Array(arrayBuffer) as any, format, 15, 8, 22, 22)
+        const logoData = await getLogoBufferForPdf(companyInfo.logo)
+        doc.addImage(logoData.buffer as any, logoData.format, 15, 8, 22, 22)
       }
     } catch (e) {
       console.error('Error adding logo to PDF:', e)
@@ -102,11 +114,12 @@ async function addKopSurat(doc: jsPDF, companyInfo: any) {
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(16)
-  doc.text(companyInfo.name || 'JASPEL ENTERPRISE', centerX, 15, { align: 'center' })
+  doc.text(companyInfo.name || 'RS MAYJEN HA THALIB', centerX, 15, { align: 'center' })
 
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(9)
-  doc.text(companyInfo.address || 'Jakarta, Indonesia', centerX, 22, { align: 'center' })
+  const addressText = companyInfo.address?.trim() || 'Kota Sungai Penuh, Jambi'
+  doc.text(addressText, centerX, 22, { align: 'center' })
 
   if (companyInfo.phone || companyInfo.email) {
     const contact = [companyInfo.phone, companyInfo.email].filter(Boolean).join(' | ')

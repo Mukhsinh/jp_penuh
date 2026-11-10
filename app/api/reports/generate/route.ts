@@ -3,13 +3,15 @@ import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 import { isMedicalUnit } from '@/lib/utils/medical-unit'
 import { getTERCategory, getTERRate } from '@/lib/formulas/ter-lookup'
-import * as fs from 'fs'
+
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
 
 const OMIT_KEYS = ['created_at', 'updated_at', 'created_by', 'updated_by']
 
 /**
  * Batched .in() helper to avoid Supabase PostgREST URL length overflow.
- * Splits large arrays into chunks, queries each batch, and merges results.
+ * Splits large arrays into chunks, queries batches in parallel, and merges results.
  */
 async function batchedIn(
   supabase: any,
@@ -18,45 +20,150 @@ async function batchedIn(
   filterColumn: string,
   filterValues: string[],
   additionalFilters?: (q: any) => any,
-  batchSize: number = 20
+  batchSize: number = 80
 ): Promise<any[]> {
   if (filterValues.length === 0) return []
 
-  const results: any[] = []
-  const pageSize = 1000
-
+  const batches: string[][] = []
   for (let i = 0; i < filterValues.length; i += batchSize) {
-    const batch = filterValues.slice(i, i + batchSize)
-    let page = 0
-    let hasMore = true
+    batches.push(filterValues.slice(i, i + batchSize))
+  }
 
-    while (hasMore) {
-      const from = page * pageSize
-      const to = from + pageSize - 1
+  const concurrency = 5
+  const results: any[] = []
 
-      let query = supabase.from(table).select(selectFields).in(filterColumn, batch).range(from, to)
-      if (additionalFilters) query = additionalFilters(query)
+  for (let i = 0; i < batches.length; i += concurrency) {
+    const chunk = batches.slice(i, i + concurrency)
+    const chunkPromises = chunk.map(async (batch) => {
+      const batchRows: any[] = []
+      let page = 0
+      let hasMore = true
+      const pageSize = 1000
 
-      const { data, error } = await query
-      if (error) {
-        console.error(`[batchedIn] Error fetching batch ${Math.floor(i / batchSize) + 1} page ${page} from ${table}:`, error)
-        throw error
-      }
+      while (hasMore) {
+        const from = page * pageSize
+        const to = from + pageSize - 1
 
-      if (data && data.length > 0) {
-        results.push(...data)
-        if (data.length < pageSize) {
-          hasMore = false
-        } else {
-          page++
+        let query = supabase.from(table).select(selectFields).in(filterColumn, batch).range(from, to)
+        if (additionalFilters) query = additionalFilters(query)
+
+        const { data, error } = await query
+        if (error) {
+          console.error(`[batchedIn] Error fetching batch from ${table}:`, error)
+          throw error
         }
-      } else {
-        hasMore = false
+
+        if (data && data.length > 0) {
+          batchRows.push(...data)
+          if (data.length < pageSize) {
+            hasMore = false
+          } else {
+            page++
+          }
+        } else {
+          hasMore = false
+        }
       }
+      return batchRows
+    })
+
+    const chunkResults = await Promise.all(chunkPromises)
+    for (const r of chunkResults) {
+      results.push(...r)
     }
   }
+
   console.log(`[batchedIn] ${table}.${filterColumn}: ${filterValues.length} IDs -> ${results.length} total rows fetched`)
   return results
+}
+
+/**
+ * Fast period assessment fetcher that uses parallel pagination instead of sequential N+1 queries.
+ */
+async function fetchPeriodAssessmentsFast(
+  supabase: any,
+  selectFields: string,
+  period: string,
+  revenueType: string | null,
+  isSub: boolean,
+  targetEmpIds?: string[]
+): Promise<any[]> {
+  // If specific small set of employees (<= 80), use batchedIn directly
+  if (targetEmpIds && targetEmpIds.length > 0 && targetEmpIds.length <= 80) {
+    return batchedIn(
+      supabase,
+      't_kpi_assessments',
+      selectFields,
+      'employee_id',
+      targetEmpIds,
+      q => {
+        let qry = q.eq('period', period)
+        if (isSub) {
+          qry = qry.not('sub_indicator_id', 'is', null)
+        } else {
+          qry = qry.is('sub_indicator_id', null)
+        }
+        if (revenueType && revenueType !== 'all') {
+          qry = qry.eq('revenue_type', revenueType)
+        }
+        return qry
+      },
+      80
+    )
+  }
+
+  // When querying all units or large set: query by period in parallel pages
+  let countQry = supabase.from('t_kpi_assessments').select('id', { count: 'exact', head: true }).eq('period', period)
+  if (isSub) {
+    countQry = countQry.not('sub_indicator_id', 'is', null)
+  } else {
+    countQry = countQry.is('sub_indicator_id', null)
+  }
+  if (revenueType && revenueType !== 'all') {
+    countQry = countQry.eq('revenue_type', revenueType)
+  }
+
+  const { count, error: countErr } = await countQry
+  if (countErr) {
+    console.error('[fetchPeriodAssessmentsFast] Count error:', countErr)
+    throw countErr
+  }
+  if (!count || count === 0) return []
+
+  const pageSize = 1000
+  const numPages = Math.ceil(count / pageSize)
+  const pagePromises = []
+
+  for (let p = 0; p < numPages; p++) {
+    const from = p * pageSize
+    const to = from + pageSize - 1
+    let qry = supabase.from('t_kpi_assessments').select(selectFields).eq('period', period).range(from, to)
+    if (isSub) {
+      qry = qry.not('sub_indicator_id', 'is', null)
+    } else {
+      qry = qry.is('sub_indicator_id', null)
+    }
+    if (revenueType && revenueType !== 'all') {
+      qry = qry.eq('revenue_type', revenueType)
+    }
+    pagePromises.push(qry)
+  }
+
+  const pageResults = await Promise.all(pagePromises)
+  let allRows: any[] = []
+  for (const res of pageResults) {
+    if (res.error) throw res.error
+    if (res.data) allRows.push(...res.data)
+  }
+
+  // If targetEmpIds provided, filter in memory
+  if (targetEmpIds && targetEmpIds.length > 0) {
+    const empSet = new Set(targetEmpIds)
+    allRows = allRows.filter((r: any) => empSet.has(r.employee_id))
+  }
+
+  console.log(`[fetchPeriodAssessmentsFast] Fetched ${allRows.length} rows (period=${period}, rev=${revenueType}, sub=${isSub})`)
+  return allRows
 }
 
 function calculatePPh21(
@@ -470,26 +577,16 @@ export async function POST(request: NextRequest) {
       console.log(`[Summary] Found ${totalEmployeesInUnit} candidate employees for unit ${effectiveUnitId} in period ${period}`)
 
       if (totalEmployeesInUnit > 0) {
-        // Use batched query to handle large units without URL overflow
+        // Use fast period query to handle all units and large sets without URL overflow or timeouts
         try {
-          const assessedEmps = await batchedIn(
+          const targetRev = revenueType && revenueType !== 'all' ? (revenueType === 'umum' ? null : revenueType) : null
+          const assessedEmps = await fetchPeriodAssessmentsFast(
             supabase,
-            't_kpi_assessments',
             'employee_id, revenue_type',
-            'employee_id',
-            unitEmpIds,
-            q => {
-              let qry = q.eq('period', period)
-              if (revenueType && revenueType !== 'all') {
-                if (revenueType === 'umum') {
-                  // Fetch both, we'll filter in memory based on unit schema
-                  qry = qry.in('revenue_type', ['umum', 'bpjs'])
-                } else {
-                  qry = qry.eq('revenue_type', revenueType)
-                }
-              }
-              return qry
-            }
+            period,
+            targetRev,
+            false,
+            effectiveUnitId ? unitEmpIds : undefined
           )
 
           let validAssessedIds = new Set<string>()
@@ -774,29 +871,21 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   }
 
   let [allAssessments, subAssessments] = await Promise.all([
-    batchedIn(
+    fetchPeriodAssessmentsFast(
       supabase,
-      't_kpi_assessments',
       mainSelectFields,
-      'employee_id',
-      empIds,
-      q => {
-        let qry = q.eq('period', period).is('sub_indicator_id', null)
-        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
-        return qry
-      }
+      period,
+      revenueType && revenueType !== 'all' ? revenueType : null,
+      false,
+      unitId && unitId !== 'all' ? empIds : undefined
     ),
-    batchedIn(
+    fetchPeriodAssessmentsFast(
       supabase,
-      't_kpi_assessments',
       'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, is_contract, contract_percentage, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
-      'employee_id',
-      empIds,
-      q => {
-        let qry = q.eq('period', period).not('sub_indicator_id', 'is', null)
-        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
-        return qry
-      }
+      period,
+      revenueType && revenueType !== 'all' ? revenueType : null,
+      true,
+      unitId && unitId !== 'all' ? empIds : undefined
     )
   ])
 
@@ -820,21 +909,21 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     const subKeySet = new Set(subAssessments.map((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}`))
 
     const [oppositeMain, oppositeSub] = await Promise.all([
-      batchedIn(
+      fetchPeriodAssessmentsFast(
         supabase,
-        't_kpi_assessments',
         mainSelectFields,
-        'employee_id',
-        empIds,
-        q => q.eq('period', period).is('sub_indicator_id', null).eq('revenue_type', oppositeRevenue)
+        period,
+        oppositeRevenue,
+        false,
+        unitId && unitId !== 'all' ? empIds : undefined
       ),
-      batchedIn(
+      fetchPeriodAssessmentsFast(
         supabase,
-        't_kpi_assessments',
         'id, employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, is_contract, contract_percentage, m_kpi_sub_indicators (id, indicator_id, measurement_type, base_index_value, weight_percentage)',
-        'employee_id',
-        empIds,
-        q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
+        period,
+        oppositeRevenue,
+        true,
+        unitId && unitId !== 'all' ? empIds : undefined
       )
     ])
 
@@ -1377,8 +1466,44 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     console.warn(`[Report] WARNING: Skipped ${skippedNoUnit} employees without unit data (m_units is null)`)
   }
 
+  // --- Pre-fetch doctor guarantee fees upfront to prevent queries in loops ---
+  const doctorMasterMap = new Map<string, number>()
+  let totalGuaranteeFeeFromDocs = 0
+  try {
+    let remPeriodeUuid: string | null = null
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(period)
+    if (isUuid) {
+      remPeriodeUuid = period
+    } else {
+      const { data: remPer } = await supabase
+        .from('remunerasi_periode')
+        .select('id')
+        .eq('periode', period)
+        .maybeSingle()
+      remPeriodeUuid = remPer?.id || null
+    }
+
+    if (remPeriodeUuid) {
+      const { data: masterDocs } = await supabase
+        .from('remunerasi_master_dokter')
+        .select('employee_id, pagu_guarantee_fee')
+        .eq('periode_id', remPeriodeUuid)
+
+      if (masterDocs && masterDocs.length > 0) {
+        masterDocs.forEach((d: any) => {
+          const fee = Number(d.pagu_guarantee_fee || 0)
+          doctorMasterMap.set(d.employee_id, fee)
+          totalGuaranteeFeeFromDocs += fee
+        })
+      }
+    }
+  } catch (docErr) {
+    console.warn('[Report] Error pre-fetching doctor master:', docErr)
+  }
+
   // --- Calculate PIR per unit and save audit trail ---
   const unitPIRMap = new Map<string, number>()
+  const pirHistoriesToSave: any[] = []
 
   for (const emp of allEmployees) {
     if (!emp.m_units) continue
@@ -1419,14 +1544,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
     if (isMedical) {
       // MEDIS Style PIR Calculation: (Allocated - Aggregate Guarantee Fees - Total Activity Value) / Total Index Points
-      const { data: masterDocs } = await supabase
-        .from('remunerasi_master_dokter')
-        .select('pagu_guarantee_fee')
-        .eq('periode_id', period)
-
-      const totalGuaranteeFee = masterDocs?.reduce((acc: number, d: any) => acc + Number(d.pagu_guarantee_fee || 0), 0) || 0
-      const sisaPaguMedis = allocatedForUnit - totalGuaranteeFee - totalActivityValueUnit
-
+      const sisaPaguMedis = allocatedForUnit - totalGuaranteeFeeFromDocs - totalActivityValueUnit
       pir = (totalSkorUnit > 0 && sisaPaguMedis > 0) ? (sisaPaguMedis / totalSkorUnit) : 0
     } else {
       // STANDARD Style (Non-Medical) with Activity deduction:
@@ -1440,14 +1558,25 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
     // Keep full precision PIR in unitPIRMap for exact mathematical incentive calculations
     unitPIRMap.set(uId, pir)
 
-    // Save audit trail (using original field names)
-    // Note: pir_value reflects the merit indices value, 
-    // allocated_for_unit is the RAW fund before deduction (to follow history pattern)
-    await savePIRHistory(
-      supabase, period, uId, unitName,
+    // Queue audit trail
+    pirHistoriesToSave.push({
+      period, uId, unitName,
       netPool, unitProp, allocatedForUnit,
       totalSkorUnit, pir, empCount
-    )
+    })
+  }
+
+  // Save all PIR histories in parallel
+  if (pirHistoriesToSave.length > 0) {
+    Promise.allSettled(
+      pirHistoriesToSave.map(h =>
+        savePIRHistory(
+          supabase, h.period, h.uId, h.unitName,
+          h.netPool, h.unitProp, h.allocatedForUnit,
+          h.totalSkorUnit, h.pir, h.empCount
+        )
+      )
+    ).catch(e => console.warn('[Report] Non-critical error saving PIR histories:', e))
   }
 
   // --- Pre-compute unit total deductions and redistribution per unit ---
@@ -1552,15 +1681,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
 
     let guaranteeFee = 0
     if (isMedical) {
-      // For doctors, guarantee fee can be added if configured
-      const { data: doctorMaster } = await supabase
-        .from('remunerasi_master_dokter')
-        .select('pagu_guarantee_fee')
-        .eq('employee_id', empId)
-        .eq('periode_id', period)
-        .maybeSingle()
-
-      guaranteeFee = Number(doctorMaster?.pagu_guarantee_fee || 0)
+      guaranteeFee = Number(doctorMasterMap.get(empId) || 0)
       grossIncentiveBeforeDeduction += guaranteeFee
     }
 
@@ -1722,15 +1843,22 @@ async function saveRemunerasiHasil(supabase: any, period: string, netPool: numbe
         pir_apply: Number(row.pir_value || 0)
       }))
 
-      // Batch in chunks of 200
+      // Batch in chunks of 200 in parallel
       const chunkSize = 200
+      const chunks: any[][] = []
       for (let i = 0; i < payload.length; i += chunkSize) {
-        const chunk = payload.slice(i, i + chunkSize)
-        const { error } = await supabase
-          .from('remunerasi_hasil')
-          .upsert(chunk, { onConflict: 'periode_id,employee_id' })
-        if (error) console.error('Error batch upserting remunerasi_hasil chunk:', error.message)
+        chunks.push(payload.slice(i, i + chunkSize))
       }
+      await Promise.all(
+        chunks.map(chunk =>
+          supabase
+            .from('remunerasi_hasil')
+            .upsert(chunk, { onConflict: 'periode_id,employee_id' })
+            .then(({ error }: any) => {
+              if (error) console.error('Error batch upserting remunerasi_hasil chunk:', error.message)
+            })
+        )
+      )
     }
   } catch (err: any) {
     console.error('Failed to save remunerasi_hasil:', err.message)
