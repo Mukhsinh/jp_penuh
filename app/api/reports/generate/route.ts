@@ -137,7 +137,7 @@ async function fetchPeriodAssessmentsFast(
   for (let p = 0; p < numPages; p++) {
     const from = p * pageSize
     const to = from + pageSize - 1
-    let qry = supabase.from('t_kpi_assessments').select(selectFields).eq('period', period).range(from, to)
+    let qry = supabase.from('t_kpi_assessments').select(selectFields).eq('period', period).order('id', { ascending: true }).range(from, to)
     if (isSub) {
       qry = qry.not('sub_indicator_id', 'is', null)
     } else {
@@ -1268,15 +1268,21 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
         const isPriority = calcMethod === 'priority'
         const isActivity = isPriority || firstCatObj?.configuration_style === 'activity'
 
-        // Resolve effectiveScore: prefer sub-assessment aggregate, else if activity use volume*tariff, else fallback
+        // Resolve effectiveScore: prefer sub-assessment aggregate, else if valid non-zero score in DB, else calculate
         let effectiveScore: number
         const subKey = `${empId}:${a.indicator_id}`
         const subAgg = subScoreMap.get(subKey)
 
-        if (subAgg !== undefined) {
+        if (subAgg !== undefined && subAgg.score > 0) {
+          effectiveScore = subAgg.score
+        } else if (rawScore !== null && rawScore !== undefined && !isNaN(parseFloat(rawScore)) && parseFloat(rawScore) !== 0) {
+          effectiveScore = parseFloat(rawScore)
+        } else if (subAgg !== undefined) {
           effectiveScore = subAgg.score
         } else if (isActivity) {
           if (basicVal > 1 && indRealization < basicVal && indRealization <= 10) {
+            effectiveScore = indRealization * basicVal
+          } else if (basicVal > 0) {
             effectiveScore = indRealization * basicVal
           } else {
             effectiveScore = indRealization

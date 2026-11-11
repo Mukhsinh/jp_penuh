@@ -416,9 +416,17 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   assessmentData?.forEach((assessment: any) => {
     const category = assessment.m_kpi_indicators?.m_kpi_categories?.category?.toLowerCase() || ''
     const subSum = subAggMap.get(`${assessment.employee_id}:${assessment.indicator_id}`)
-    let score = subSum !== undefined ? subSum : (Number(assessment.score) || 0)
+    let score = (subSum !== undefined && subSum > 0) ? subSum : (Number(assessment.score) || 0)
+    if (score === 0 && subSum !== undefined) {
+      score = subSum
+    }
     if (score === 0 && Number(assessment.realization_value) > 0) {
-      score = Number(assessment.realization_value)
+      const tariff = Number(assessment.m_kpi_indicators?.base_index_value || 0)
+      if (tariff > 0) {
+        score = Number(assessment.realization_value) * tariff
+      } else {
+        score = Number(assessment.realization_value)
+      }
     }
     const achievement = assessment.achievement_percentage || 0
     const employeeId = assessment.employee_id
