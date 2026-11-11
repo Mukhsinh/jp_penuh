@@ -710,6 +710,18 @@ export async function activatePegawai(id: string, period?: string): Promise<{ su
 
     const adminSupabase = await createAdminClient()
 
+    // Resolve true employee_id if a snapshot UUID was passed
+    let actualEmployeeId = id
+    const { data: snapById } = await adminSupabase
+      .from('t_employee_period_snapshots')
+      .select('employee_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (snapById?.employee_id) {
+      actualEmployeeId = snapById.employee_id
+    }
+
     if (period) {
       const { data: periodRow } = await adminSupabase
         .from('t_employee_periods')
@@ -720,31 +732,79 @@ export async function activatePegawai(id: string, period?: string): Promise<{ su
       if (periodRow?.is_locked) {
         return {
           success: false,
-          error: `Periode ${periodRow.period_name || period} telah dikunci.`
+          error: `Periode ${periodRow.period_name || period} telah dikunci. Status keaktifan pegawai pada periode ini tidak dapat diubah.`
         }
       }
 
-      await adminSupabase
+      const { data: updatedSnap } = await adminSupabase
         .from('t_employee_period_snapshots')
         .update({ is_active: true, updated_at: new Date().toISOString() })
         .eq('period', period)
-        .eq('employee_id', id)
+        .eq('employee_id', actualEmployeeId)
+        .select()
+
+      if (!updatedSnap || updatedSnap.length === 0) {
+        const { data: masterEmp } = await adminSupabase
+          .from('m_employees')
+          .select('*')
+          .eq('id', actualEmployeeId)
+          .maybeSingle()
+
+        if (masterEmp) {
+          await adminSupabase.from('t_employee_period_snapshots').upsert([{
+            period,
+            employee_id: masterEmp.id,
+            employee_code: masterEmp.employee_code,
+            full_name: masterEmp.full_name,
+            unit_id: masterEmp.unit_id,
+            position: masterEmp.position,
+            role: masterEmp.role || 'employee',
+            employee_status: masterEmp.employee_status,
+            employment_status: masterEmp.employment_status,
+            pns_grade: masterEmp.pns_grade,
+            tax_status: masterEmp.tax_status,
+            tax_type: masterEmp.tax_type,
+            nik: masterEmp.nik,
+            bank_name: masterEmp.bank_name,
+            bank_account_number: masterEmp.bank_account_number,
+            bank_account_name: masterEmp.bank_account_name,
+            phone: masterEmp.phone,
+            email: masterEmp.email,
+            is_active: true
+          }], { onConflict: 'period,employee_id' })
+        }
+      }
     }
 
-    let updateQuery = adminSupabase
-      .from('m_employees')
-      .update({ is_active: true, updated_at: new Date().toISOString() })
-      .eq('id', id)
+    // Only sync to master m_employees if period is latest open period
+    let syncToMaster = true
+    if (period) {
+      const { data: laterPeriods } = await adminSupabase
+        .from('t_employee_periods')
+        .select('period')
+        .gt('period', period)
+        .limit(1)
 
-    if (isUnitManager) {
-      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+      if (laterPeriods && laterPeriods.length > 0) {
+        syncToMaster = false
+      }
     }
 
-    const { error } = await updateQuery
+    if (syncToMaster) {
+      let updateQuery = adminSupabase
+        .from('m_employees')
+        .update({ is_active: true, updated_at: new Date().toISOString() })
+        .eq('id', actualEmployeeId)
 
-    if (error) {
-      console.error('Activate error:', error)
-      return { success: false, error: error.message }
+      if (isUnitManager) {
+        updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+      }
+
+      const { error } = await updateQuery
+      if (error) {
+        console.error('Activate error:', error)
+        return { success: false, error: error.message }
+      }
     }
 
     revalidatePath('/pegawai')
@@ -775,6 +835,18 @@ export async function deactivatePegawai(id: string, period?: string): Promise<{ 
 
     const adminSupabase = await createAdminClient()
 
+    // Resolve true employee_id if a snapshot UUID was passed
+    let actualEmployeeId = id
+    const { data: snapById } = await adminSupabase
+      .from('t_employee_period_snapshots')
+      .select('employee_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (snapById?.employee_id) {
+      actualEmployeeId = snapById.employee_id
+    }
+
     if (period) {
       const { data: periodRow } = await adminSupabase
         .from('t_employee_periods')
@@ -785,31 +857,79 @@ export async function deactivatePegawai(id: string, period?: string): Promise<{ 
       if (periodRow?.is_locked) {
         return {
           success: false,
-          error: `Periode ${periodRow.period_name || period} telah dikunci.`
+          error: `Periode ${periodRow.period_name || period} telah dikunci. Status keaktifan pegawai pada periode ini tidak dapat diubah.`
         }
       }
 
-      await adminSupabase
+      const { data: updatedSnap } = await adminSupabase
         .from('t_employee_period_snapshots')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('period', period)
-        .eq('employee_id', id)
+        .eq('employee_id', actualEmployeeId)
+        .select()
+
+      if (!updatedSnap || updatedSnap.length === 0) {
+        const { data: masterEmp } = await adminSupabase
+          .from('m_employees')
+          .select('*')
+          .eq('id', actualEmployeeId)
+          .maybeSingle()
+
+        if (masterEmp) {
+          await adminSupabase.from('t_employee_period_snapshots').upsert([{
+            period,
+            employee_id: masterEmp.id,
+            employee_code: masterEmp.employee_code,
+            full_name: masterEmp.full_name,
+            unit_id: masterEmp.unit_id,
+            position: masterEmp.position,
+            role: masterEmp.role || 'employee',
+            employee_status: masterEmp.employee_status,
+            employment_status: masterEmp.employment_status,
+            pns_grade: masterEmp.pns_grade,
+            tax_status: masterEmp.tax_status,
+            tax_type: masterEmp.tax_type,
+            nik: masterEmp.nik,
+            bank_name: masterEmp.bank_name,
+            bank_account_number: masterEmp.bank_account_number,
+            bank_account_name: masterEmp.bank_account_name,
+            phone: masterEmp.phone,
+            email: masterEmp.email,
+            is_active: false
+          }], { onConflict: 'period,employee_id' })
+        }
+      }
     }
 
-    let updateQuery = adminSupabase
-      .from('m_employees')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('id', id)
+    // Only sync to master m_employees if period is latest open period
+    let syncToMaster = true
+    if (period) {
+      const { data: laterPeriods } = await adminSupabase
+        .from('t_employee_periods')
+        .select('period')
+        .gt('period', period)
+        .limit(1)
 
-    if (isUnitManager) {
-      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+      if (laterPeriods && laterPeriods.length > 0) {
+        syncToMaster = false
+      }
     }
 
-    const { error } = await updateQuery
+    if (syncToMaster) {
+      let updateQuery = adminSupabase
+        .from('m_employees')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', actualEmployeeId)
 
-    if (error) {
-      console.error('Deactivate error:', error)
-      return { success: false, error: error.message }
+      if (isUnitManager) {
+        updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+      }
+
+      const { error } = await updateQuery
+      if (error) {
+        console.error('Deactivate error:', error)
+        return { success: false, error: error.message }
+      }
     }
 
     revalidatePath('/pegawai')

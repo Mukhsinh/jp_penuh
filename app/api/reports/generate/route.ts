@@ -386,6 +386,8 @@ export async function POST(request: NextRequest) {
         .select('employee_id')
         .eq('period', period)
         .eq('unit_id', unitId)
+        .eq('is_active', true)
+        .neq('role', 'superadmin')
         .range(0, 9999)
 
       if (snapEmps && snapEmps.length > 0) {
@@ -395,6 +397,8 @@ export async function POST(request: NextRequest) {
           .from('m_employees')
           .select('id')
           .eq('unit_id', unitId)
+          .eq('is_active', true)
+          .neq('role', 'superadmin')
           .range(0, 9999)
         unitEmps = mEmps || []
       }
@@ -548,14 +552,14 @@ export async function POST(request: NextRequest) {
       let empListQuery = useSnap
         ? supabase
             .from('t_employee_period_snapshots')
-            .select('employee_id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
+            .select('employee_id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code, name)')
             .eq('period', period)
             .eq('is_active', true)
             .neq('role', 'superadmin')
             .neq('m_units.code', 'ADMIN')
         : supabase
             .from('m_employees')
-            .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code)')
+            .select('id, unit_id, role, is_active, m_units!inner(kpi_schema_mode, code, name)')
             .eq('is_active', true)
             .neq('role', 'superadmin')
             .neq('m_units.code', 'ADMIN')
@@ -567,12 +571,23 @@ export async function POST(request: NextRequest) {
       const { data: rawUnitEmployees, error: unitEmpErr } = await empListQuery.range(0, 9999)
       if (unitEmpErr) console.error('[Summary] Error fetching employees:', unitEmpErr)
 
-      const unitEmployees = (rawUnitEmployees || []).map((e: any) => ({
-        ...e,
-        id: useSnap ? e.employee_id : e.id
-      }))
+      const unitEmployees = (rawUnitEmployees || [])
+        .filter((item: any) => {
+          if (item.role === 'superadmin') return false
+          if (item.is_active === false) return false
+          const unit = Array.isArray(item.m_units) ? item.m_units[0] : item.m_units
+          const code = String(unit?.code || '').toUpperCase()
+          const name = String(unit?.name || '').toUpperCase()
+          if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+          return true
+        })
+        .map((e: any) => ({
+          ...e,
+          id: useSnap ? e.employee_id : e.id
+        }))
 
       const unitEmpIds = unitEmployees.map((e: any) => e.id)
+      const unitEmpIdSet = new Set(unitEmpIds)
       totalEmployeesInUnit = unitEmpIds.length
       console.log(`[Summary] Found ${totalEmployeesInUnit} candidate employees for unit ${effectiveUnitId} in period ${period}`)
 
@@ -609,7 +624,11 @@ export async function POST(request: NextRequest) {
               }
             })
           } else {
-            validAssessedIds = new Set((assessedEmps || []).map((a: any) => a.employee_id))
+            (assessedEmps || []).forEach((a: any) => {
+              if (unitEmpIdSet.has(a.employee_id)) {
+                validAssessedIds.add(a.employee_id)
+              }
+            })
           }
 
           assessedCount = validAssessedIds.size
@@ -777,10 +796,20 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
   }
 
   const { data: rawAllEmployees, error: allEmpError } = await empQuery.range(0, 9999)
-  const allEmployees = (rawAllEmployees || []).map((e: any) => ({
-    ...e,
-    id: useSnap ? e.employee_id : e.id
-  }))
+  const allEmployees = (rawAllEmployees || [])
+    .filter((e: any) => {
+      if (e.role === 'superadmin') return false
+      if (e.is_active === false) return false
+      const unit = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units
+      const code = String(unit?.code || '').toUpperCase()
+      const name = String(unit?.name || '').toUpperCase()
+      if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+      return true
+    })
+    .map((e: any) => ({
+      ...e,
+      id: useSnap ? e.employee_id : e.id
+    }))
   console.log(`[Report] generateIncentiveReport: Fetched ${allEmployees?.length || 0} employees candidates for unit ${unitId}`)
 
   // Fetch unit proportions locked/snapshotted for this specific period

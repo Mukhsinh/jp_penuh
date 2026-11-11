@@ -119,8 +119,13 @@ async function upsertAssessment(
 
   if (hasSubs) {
     for (const sub of assessment.sub_assessments) {
-      aggregateScore += (sub.score || 0)
-      aggregateRealization += (sub.realization_value || 0)
+      let sScore = Number(sub.score) || 0
+      const sReal = Number(sub.realization_value) || 0
+      if (sScore === 0 && sReal > 0) {
+        sScore = sReal
+      }
+      aggregateScore += sScore
+      aggregateRealization += sReal
     }
   }
 
@@ -158,9 +163,9 @@ async function upsertAssessment(
     target_value: assessment.target_value,
     weight_percentage: assessment.weight_percentage,
     notes: assessment.notes,
-    score: (assessment.score !== undefined && assessment.score !== null)
+    score: (assessment.score !== undefined && assessment.score !== null && assessment.score !== 0)
       ? assessment.score
-      : (hasSubs ? aggregateScore : (assessment.score ?? effectiveRealization)),
+      : (hasSubs ? (aggregateScore > 0 ? aggregateScore : effectiveRealization) : (assessment.score ?? effectiveRealization)),
     assessor_id: assessment.assessor_id,
     revenue_type: revType,
     is_contract: assessment.is_contract ?? false,
@@ -235,7 +240,7 @@ async function upsertAssessment(
       let subScore = Number(sub.score) || 0
       const subRealization = Number(sub.realization_value) || 0
 
-      // Auto-compute score for quantitative sub-indicators if score was not passed or 0
+      // Auto-compute score for sub-indicators if score was not passed or 0
       if (subRealization > 0 && subScore === 0 && sub.sub_indicator_id) {
         const { data: subConfig } = await adminClient
           .from('m_kpi_sub_indicators')
@@ -244,6 +249,8 @@ async function upsertAssessment(
           .maybeSingle()
         if (subConfig?.measurement_type === 'quantitative') {
           subScore = Number((subRealization * Number(subConfig.base_index_value || 0)).toFixed(4))
+        } else {
+          subScore = subRealization
         }
       }
 
@@ -440,15 +447,39 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Employee record not found' }, { status: 404 })
     }
 
-    // Enforce unit isolation for unit managers
+    // Enforce unit isolation for unit managers (respecting period snapshot)
     if (currentEmployee.role === 'unit_manager') {
-      const { data: targetEmployee } = await adminClient
-        .from('m_employees')
-        .select('unit_id')
-        .eq('id', employeeId)
-        .single()
+      let targetUnitId: string | null = null
+      if (period) {
+        const { data: snapTarget } = await adminClient
+          .from('t_employee_period_snapshots')
+          .select('unit_id')
+          .eq('period', period)
+          .eq('employee_id', employeeId)
+          .maybeSingle()
+        if (snapTarget?.unit_id) targetUnitId = snapTarget.unit_id
+      }
+      if (!targetUnitId) {
+        const { data: targetEmployee } = await adminClient
+          .from('m_employees')
+          .select('unit_id')
+          .eq('id', employeeId)
+          .single()
+        targetUnitId = targetEmployee?.unit_id || null
+      }
 
-      if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
+      let managerUnitId = currentEmployee.unit_id
+      if (period) {
+        const { data: snapManager } = await adminClient
+          .from('t_employee_period_snapshots')
+          .select('unit_id')
+          .eq('period', period)
+          .eq('employee_id', currentEmployee.id)
+          .maybeSingle()
+        if (snapManager?.unit_id) managerUnitId = snapManager.unit_id
+      }
+
+      if (!targetUnitId || targetUnitId !== managerUnitId) {
         return NextResponse.json(
           { error: 'You can only view assessments for employees in your unit' },
           { status: 403 }
@@ -468,12 +499,25 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to fetch assessments: ${fetchErr.message}`)
     }
 
-    // Get employee contract / partial status if available
-    const { data: empRecord } = await adminClient
-      .from('m_employees')
-      .select('is_contract, contract_percentage, unit_id')
-      .eq('id', employeeId)
-      .maybeSingle()
+    // Get employee contract / partial status if available (checking period snapshot first)
+    let empRecord: any = null
+    if (period) {
+      const { data: snapEmp } = await adminClient
+        .from('t_employee_period_snapshots')
+        .select('is_contract, contract_percentage, unit_id')
+        .eq('period', period)
+        .eq('employee_id', employeeId)
+        .maybeSingle()
+      if (snapEmp) empRecord = snapEmp
+    }
+    if (!empRecord) {
+      const { data: masterEmp } = await adminClient
+        .from('m_employees')
+        .select('is_contract, contract_percentage, unit_id')
+        .eq('id', employeeId)
+        .maybeSingle()
+      empRecord = masterEmp
+    }
 
     const isPartialUnit = isPartialEligibleUnit(empRecord?.unit_id) && (revenueType === 'bpjs' || revenueType === 'umum')
     const contractAssessment = assessments?.find((a: any) => a.is_contract !== null && a.is_contract !== undefined)
@@ -589,14 +633,28 @@ export async function POST(request: NextRequest) {
       }, { status: 403 })
     }
 
-    // Optimization: Batch fetch employee details & unit information
+    // Optimization: Batch fetch employee details & unit information (checking period snapshot first)
     const uniqueEmpIds = Array.from(new Set(itemsToProcess.map((i: any) => i.employee_id).filter(Boolean)))
-    const { data: targetEmps } = await adminClient
-      .from('m_employees')
-      .select('id, unit_id, m_units(kpi_schema_mode)')
-      .in('id', uniqueEmpIds)
+    const empUnitMap = new Map<string, any>()
 
-    const empUnitMap = new Map((targetEmps || []).map((e: any) => [e.id, e]))
+    const { data: snapEmps } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('employee_id, unit_id, m_units(kpi_schema_mode)')
+      .eq('period', samplePeriod)
+      .in('employee_id', uniqueEmpIds)
+
+    snapEmps?.forEach((s: any) => {
+      empUnitMap.set(s.employee_id, { id: s.employee_id, unit_id: s.unit_id, m_units: s.m_units })
+    })
+
+    const missingEmpIds = uniqueEmpIds.filter(id => !empUnitMap.has(id as string))
+    if (missingEmpIds.length > 0) {
+      const { data: targetEmps } = await adminClient
+        .from('m_employees')
+        .select('id, unit_id, m_units(kpi_schema_mode)')
+        .in('id', missingEmpIds)
+      targetEmps?.forEach((e: any) => empUnitMap.set(e.id, e))
+    }
 
     // Optimization: Batch fetch existing assessment IDs for this period to eliminate N+1 queries
     const { data: existingRecords } = await adminClient
@@ -750,7 +808,7 @@ export async function POST(request: NextRequest) {
             .from('t_kpi_assessments')
             .update({
               is_contract: Boolean(itemWithContract.is_contract),
-              contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
+              contract_percentage: Number(itemWithContract.contract_percentage !== undefined && itemWithContract.contract_percentage !== null ? itemWithContract.contract_percentage : 100)
             })
             .eq('employee_id', empId)
             .eq('period', samplePeriod)
@@ -763,7 +821,7 @@ export async function POST(request: NextRequest) {
               .from('m_employees')
               .update({
                 is_contract: Boolean(itemWithContract.is_contract),
-                contract_percentage: Number(itemWithContract.contract_percentage !== undefined ? itemWithContract.contract_percentage : 100)
+                contract_percentage: Number(itemWithContract.contract_percentage !== undefined && itemWithContract.contract_percentage !== null ? itemWithContract.contract_percentage : 100)
               })
               .eq('id', empId)
           }

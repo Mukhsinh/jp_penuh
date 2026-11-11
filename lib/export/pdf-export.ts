@@ -404,7 +404,8 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
 export async function generateSummaryReportPDF(
   results: any[],
   period: string,
-  reportType: string
+  reportType: string,
+  revenueType?: string
 ): Promise<Uint8Array> {
   const doc = new jsPDF('landscape')
   const companyInfo = await getCompanyInfoServer()
@@ -414,14 +415,26 @@ export async function generateSummaryReportPDF(
 
   const centerX = doc.internal.pageSize.width / 2
 
-  doc.setFontSize(14)
+  doc.setFontSize(13)
   doc.setFont('helvetica', 'bold')
 
   let title = `LAPORAN REKAPITULASI PEMBAYARAN JASPEL - PERIODE ${period}`
   if (reportType === 'kpi-achievement') title = `LAPORAN PENCAPAIAN KPI - PERIODE ${period}`
   if (reportType === 'unit-comparison') title = `LAPORAN PERBANDINGAN UNIT - PERIODE ${period}`
 
-  doc.text(title, centerX, 42, { align: 'center' })
+  doc.text(title, centerX, 40, { align: 'center' })
+
+  const revLabel = revenueType === 'bpjs'
+    ? 'BPJS Kesehatan'
+    : revenueType === 'umum'
+      ? 'Pendapatan Umum'
+      : revenueType === 'all'
+        ? 'Konsolidasi (Gabungan BPJS & UMUM)'
+        : (revenueType || 'BPJS Kesehatan')
+
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'bold')
+  doc.text(`JENIS PENDAPATAN: ${revLabel.toUpperCase()}`, centerX, 45, { align: 'center' })
 
   let head = []
   let body = []
@@ -446,9 +459,12 @@ export async function generateSummaryReportPDF(
         doc.addPage()
         // Re-add Kop Surat and title on each page for bulk reports
         await addKopSurat(doc, companyInfo)
-        doc.setFontSize(14)
+        doc.setFontSize(13)
         doc.setFont('helvetica', 'bold')
-        doc.text(title, centerX, 42, { align: 'center' })
+        doc.text(title, centerX, 40, { align: 'center' })
+        doc.setFontSize(9)
+        doc.setFont('helvetica', 'bold')
+        doc.text(`JENIS PENDAPATAN: ${revLabel.toUpperCase()}`, centerX, 45, { align: 'center' })
       }
 
       const indexResults = empResults.filter(r => !r.is_activity)
@@ -557,7 +573,7 @@ export async function generateSummaryReportPDF(
       r.employee_count
     ])
     autoTable(doc, {
-      startY: 50,
+      startY: 49,
       head,
       body,
       theme: 'grid',
@@ -586,7 +602,7 @@ export async function generateSummaryReportPDF(
       Number(r.net_incentive || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     ])
     autoTable(doc, {
-      startY: 50,
+      startY: 49,
       head,
       body,
       theme: 'grid',
@@ -692,7 +708,7 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
   } else if (options.reportType === 'system-overview') {
     return await generateSystemOverviewPDF()
   } else {
-    return await generateSummaryReportPDF(options.data, options.period, options.reportType)
+    return await generateSummaryReportPDF(options.data, options.period, options.reportType, options.revenueType)
   }
 }
 

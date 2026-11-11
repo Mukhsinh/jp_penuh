@@ -10,13 +10,21 @@ export const revalidate = 0
 
 async function getAvailablePeriods(supabase: any): Promise<string[]> {
   try {
-    // Fetch periods strictly from t_pool where pool revenue has been input
+    // Query periods from t_employee_periods first to prioritize locked and active employee periods matching /pegawai
+    const { data: empPeriods } = await supabase
+      .from('t_employee_periods')
+      .select('period')
+      .order('period', { ascending: false })
+
     const { data: poolData } = await supabase
       .from('t_pool')
       .select('period')
       .order('period', { ascending: false })
 
     const periodsSet = new Set<string>()
+    empPeriods?.forEach((item: any) => {
+      if (item.period) periodsSet.add(item.period)
+    })
     poolData?.forEach((item: any) => {
       if (item.period) periodsSet.add(item.period)
     })

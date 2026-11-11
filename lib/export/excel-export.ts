@@ -20,7 +20,7 @@ export interface ReportExportOptions {
  * Requirements: 12.5, 16.1, 16.2, 16.7
  */
 export async function exportToExcel(options: ReportExportOptions): Promise<Buffer> {
-  const { reportType, period, data } = options
+  const { reportType, period, data, revenueType } = options
 
   // Create workbook
   const wb = XLSX.utils.book_new()
@@ -146,6 +146,22 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
   // Fetch Company Info for Kop Surat
   const companyInfo = await getCompanyInfoServer()
 
+  const revLabel = revenueType === 'bpjs'
+    ? 'BPJS Kesehatan'
+    : revenueType === 'umum'
+      ? 'Pendapatan Umum'
+      : revenueType === 'all'
+        ? 'Konsolidasi (Gabungan BPJS & UMUM)'
+        : (revenueType || 'BPJS Kesehatan')
+
+  const titleText = reportType === 'incentive'
+    ? 'LAPORAN REKAPITULASI PEMBAYARAN JASPEL'
+    : reportType === 'kpi-achievement'
+      ? 'LAPORAN PENCAPAIAN KINERJA PEGAWAI (KPI)'
+      : reportType === 'unit-comparison'
+        ? 'LAPORAN PERBANDINGAN PERFORMA UNIT'
+        : 'SLIP GAJI DAN INSENTIF PEGAWAI'
+
   // Build Kop Surat
   const kopSurat = [
     [(companyInfo.name || 'RS MAYJEN HA THALIB').toUpperCase()],
@@ -157,8 +173,9 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
       ].filter(Boolean).join(' | ')
     ],
     ['━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'],
-    [sheetName.toUpperCase()],
+    [titleText],
     [`Periode: ${period}`],
+    [`Jenis Pendapatan: ${revLabel}`],
     ['']
   ]
 

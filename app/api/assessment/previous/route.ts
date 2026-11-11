@@ -63,15 +63,39 @@ export async function GET(request: NextRequest) {
             )
         }
 
-        // Enforce unit isolation for unit managers
+        // Enforce unit isolation for unit managers (checking period snapshot first)
         if (currentEmployee.role === 'unit_manager') {
-            const { data: targetEmployee } = await adminClient
-                .from('m_employees')
-                .select('unit_id')
-                .eq('id', employeeId)
-                .single()
+            let targetUnitId: string | null = null
+            if (currentPeriod) {
+                const { data: snapTarget } = await adminClient
+                    .from('t_employee_period_snapshots')
+                    .select('unit_id')
+                    .eq('period', currentPeriod)
+                    .eq('employee_id', employeeId)
+                    .maybeSingle()
+                if (snapTarget?.unit_id) targetUnitId = snapTarget.unit_id
+            }
+            if (!targetUnitId) {
+                const { data: targetEmployee } = await adminClient
+                    .from('m_employees')
+                    .select('unit_id')
+                    .eq('id', employeeId)
+                    .single()
+                targetUnitId = targetEmployee?.unit_id || null
+            }
 
-            if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
+            let managerUnitId = currentEmployee.unit_id
+            if (currentPeriod) {
+                const { data: snapManager } = await adminClient
+                    .from('t_employee_period_snapshots')
+                    .select('unit_id')
+                    .eq('period', currentPeriod)
+                    .eq('employee_id', currentEmployee.id)
+                    .maybeSingle()
+                if (snapManager?.unit_id) managerUnitId = snapManager.unit_id
+            }
+
+            if (!targetUnitId || targetUnitId !== managerUnitId) {
                 return NextResponse.json(
                     { error: 'You can only view assessments for employees in your unit' },
                     { status: 403 }

@@ -97,16 +97,27 @@ export async function GET(request: NextRequest) {
 }
 
 async function getAvailablePeriods(supabase: any) {
-  const { data, error } = await supabase
+  // Query periods from t_employee_periods first to prioritize locked and active employee periods
+  const { data: empPeriods } = await supabase
+    .from('t_employee_periods')
+    .select('period')
+    .order('period', { ascending: false })
+
+  const { data: poolPeriods } = await supabase
     .from('t_pool')
     .select('period')
     .order('period', { ascending: false })
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
+  const periodSet = new Set<string>()
+  ;(empPeriods || []).forEach((item: any) => {
+    if (item.period) periodSet.add(item.period)
+  })
+  ;(poolPeriods || []).forEach((item: any) => {
+    if (item.period) periodSet.add(item.period)
+  })
 
-  const periods = (data || []).map((item: any) => item.period).filter(Boolean)
+  // Return sorted periods descending
+  const periods = Array.from(periodSet).sort((a, b) => b.localeCompare(a))
   return NextResponse.json({ success: true, periods })
 }
 
@@ -188,7 +199,7 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const userUnitId = currentEmp?.unit_id
 
   // Enforce unit isolation: unit managers can strictly query their own unit only
-  const effectiveUnitId = (userRole === 'unit_manager' && userUnitId) ? userUnitId : unitId
+  let effectiveUnitId = (userRole === 'unit_manager' && userUnitId) ? userUnitId : unitId
 
   // Check if snapshot exists for period
   const { count: snapCount } = await supabase
@@ -198,17 +209,30 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
 
   const useSnapshot = Boolean(snapCount && snapCount > 0)
 
-  // Build base query for employees
+  // If unit manager and snapshot exists, resolve manager's assigned unit in that snapshot
+  if (useSnapshot && userRole === 'unit_manager' && currentEmp?.id) {
+    const { data: snapManager } = await supabase
+      .from('t_employee_period_snapshots')
+      .select('unit_id')
+      .eq('period', period)
+      .eq('employee_id', currentEmp.id)
+      .maybeSingle()
+    if (snapManager?.unit_id) {
+      effectiveUnitId = snapManager.unit_id
+    }
+  }
+
+  // Build base query for employees strictly matching period snapshots
   let employeeQuery = useSnapshot
     ? supabase
         .from('t_employee_period_snapshots')
-        .select('employee_id, full_name, unit_id, m_units(name)')
+        .select('employee_id, full_name, unit_id, is_active, m_units(id, name, code)')
         .eq('period', period)
         .eq('is_active', true)
         .neq('role', 'superadmin')
     : supabase
         .from('m_employees')
-        .select('id, full_name, unit_id, m_units(name)')
+        .select('id, full_name, unit_id, is_active, m_units(id, name, code)')
         .eq('is_active', true)
         .neq('role', 'superadmin')
 
@@ -223,7 +247,18 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
     return NextResponse.json({ success: false, error: employeeError.message }, { status: 500 })
   }
 
-  const employeesData = (rawEmployeesData || []).map((e: any) => ({
+  // Filter out superadmin role AND superadmin unit employees
+  const validEmployees = (rawEmployeesData || []).filter((item: any) => {
+    if (item.role === 'superadmin') return false
+    if (item.is_active === false) return false
+    const unit = Array.isArray(item.m_units) ? item.m_units[0] : item.m_units
+    const code = String(unit?.code || '').toUpperCase()
+    const name = String(unit?.name || '').toUpperCase()
+    if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+    return true
+  })
+
+  const employeesData = validEmployees.map((e: any) => ({
     ...e,
     id: useSnapshot ? e.employee_id : e.id
   }))
@@ -343,6 +378,11 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
       if (effectiveScore === 0 && Math.abs(realScore) > 0) {
         effectiveScore = realScore
       }
+    } else {
+      if (effectiveScore === 0 && Number(s.realization_value) > 0) {
+        const subWeight = Number(s.m_kpi_sub_indicators?.weight_percentage || 100)
+        effectiveScore = Number(s.realization_value) * (subWeight / 100)
+      }
     }
 
     subAggMap.set(key, (subAggMap.get(key) || 0) + effectiveScore)
@@ -356,6 +396,17 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
     'employee_id',
     empIds,
     q => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`).is('sub_indicator_id', null)
+  )
+
+  // Create snapshot-aware metadata map for employee name and unit name
+  const empMetaMap = new Map(
+    employeesData.map((e: any) => [
+      e.id,
+      {
+        name: e.full_name,
+        unit_name: (Array.isArray(e.m_units) ? e.m_units[0]?.name : e.m_units?.name) || 'N/A'
+      }
+    ])
   )
 
   // Calculate category averages
@@ -375,11 +426,12 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
 
     const isPriority = assessment.m_kpi_indicators?.calculation_method === 'priority'
 
-    // Collect employee total scores
+    // Collect employee total scores (respecting period snapshot metadata if present)
     if (!employeeScores.has(employeeId)) {
+      const meta = empMetaMap.get(employeeId)
       employeeScores.set(employeeId, {
-        employee_name: assessment.m_employees?.full_name || 'N/A',
-        unit_name: assessment.m_employees?.m_units?.name || 'N/A',
+        employee_name: meta?.name || assessment.m_employees?.full_name || 'N/A',
+        unit_name: meta?.unit_name || assessment.m_employees?.m_units?.name || 'N/A',
         is_contract: assessment.is_contract,
         contract_percentage: assessment.contract_percentage,
         scores: [],
@@ -419,9 +471,12 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
       const isMedical = isMedicalUnit(null, data.unit_name);
       const isPartial = isPartialEligibleUnit(null, data.unit_name) && (revenueType === 'bpjs' || revenueType === 'umum');
       const isContract = Boolean(data.is_contract);
+      const pct = data.contract_percentage !== null && data.contract_percentage !== undefined && !isNaN(Number(data.contract_percentage))
+        ? Number(data.contract_percentage)
+        : 100;
       const contractMultiplier = (isMedical && isContract)
-        ? (Math.max(0, Number(data.contract_percentage) || 100) / 100)
-        : ((isPartial && isContract) ? (Math.max(0, Number(data.contract_percentage) || 100) / 100) : 1);
+        ? (Math.max(0, pct) / 100)
+        : ((isPartial && isContract) ? (Math.max(0, pct) / 100) : 1);
 
       const p1 = round2(calculateCategoryScore(data.p1_scores, isMedical) * contractMultiplier);
       const p2 = round2(calculateCategoryScore(data.p2_scores, isMedical) * contractMultiplier);

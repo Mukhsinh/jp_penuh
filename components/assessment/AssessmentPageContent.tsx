@@ -34,7 +34,10 @@ export default function AssessmentPageContent({
 }: AssessmentPageContentProps) {
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>('bpjs')
   const [availablePeriods, setAvailablePeriods] = useState<string[]>(availablePeriodsProp || [])
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('')
+  const initialPeriod = (availablePeriodsProp && availablePeriodsProp.length > 0)
+    ? (availablePeriodsProp.includes('2026-01') ? '2026-01' : availablePeriodsProp[0])
+    : ''
+  const [selectedPeriod, setSelectedPeriod] = useState<string>(initialPeriod)
   const [employees, setEmployees] = useState<AssessmentStatus[]>([])
   const [filteredEmployees, setFilteredEmployees] = useState<AssessmentStatus[]>([])
   const [loading, setLoading] = useState(false)
@@ -130,8 +133,9 @@ export default function AssessmentPageContent({
         const periodsRes = await fetch('/api/assessment/reports?action=periods')
         if (periodsRes.ok) {
           const periodsData = await periodsRes.json()
-          if (periodsData.success && periodsData.periods) {
+          if (periodsData.success && periodsData.periods && periodsData.periods.length > 0) {
             setAvailablePeriods(periodsData.periods)
+            setSelectedPeriod(prev => prev || (periodsData.periods.includes('2026-01') ? '2026-01' : periodsData.periods[0]))
           }
         }
       }

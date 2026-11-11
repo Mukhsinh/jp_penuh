@@ -45,6 +45,16 @@ interface AssessmentStatus {
 async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, period: string, revenueType: string = 'bpjs'): Promise<AssessmentStatus[]> {
   let result: AssessmentStatus[] = []
 
+  // Get admin unit IDs to exclude
+  const { data: rawUnits } = await supabase.from('m_units').select('id, code, name')
+  const adminUnitIds = (rawUnits || [])
+    .filter((u: any) => {
+      const code = String(u.code || '').toUpperCase()
+      const name = String(u.name || '').toUpperCase()
+      return code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')
+    })
+    .map((u: any) => u.id)
+
   // Check if snapshot exists for period
   const { count: snapCount } = await supabase
     .from('t_employee_period_snapshots')
@@ -61,7 +71,9 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
           full_name,
           unit_id,
           role,
-          m_units!inner (
+          is_active,
+          m_units (
+            id,
             name,
             code
           )
@@ -76,7 +88,9 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
           full_name,
           unit_id,
           role,
-          m_units!inner (
+          is_active,
+          m_units (
+            id,
             name,
             code
           )
@@ -84,15 +98,36 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
         .eq('is_active', true)
         .neq('role', 'superadmin')
 
-  if (unitIdFilter && unitIdFilter !== '0') {
+  if (adminUnitIds.length > 0) {
+    empQuery = empQuery.not('unit_id', 'in', `(${adminUnitIds.join(',')})`)
+  }
+
+  if (unitIdFilter && unitIdFilter !== '0' && unitIdFilter !== 'all') {
     empQuery = empQuery.eq('unit_id', unitIdFilter)
   }
 
   const { data: rawDirectEmps } = await empQuery.order('full_name')
-  const directEmps = (rawDirectEmps || []).map((e: any) => ({
-    ...e,
-    id: useSnapshot ? e.employee_id : e.id
-  }))
+
+  // Filter out superadmin role AND superadmin unit employees strictly
+  const validDirectEmps = (rawDirectEmps || []).filter((item: any) => {
+    if (item.role === 'superadmin') return false
+    if (item.is_active === false) return false
+    const unit = Array.isArray(item.m_units) ? item.m_units[0] : item.m_units
+    const code = String(unit?.code || '').toUpperCase()
+    const name = String(unit?.name || '').toUpperCase()
+    if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+    return true
+  })
+
+  const directEmps = validDirectEmps.map((e: any) => {
+    const unit = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units
+    return {
+      ...e,
+      id: useSnapshot ? e.employee_id : e.id,
+      employee_id: useSnapshot ? e.employee_id : e.id,
+      m_units: unit || undefined
+    }
+  })
 
   if (directEmps && directEmps.length > 0) {
     // Step 1: Preload kpi unit schemas and active categories
@@ -247,7 +282,7 @@ export async function GET(request: NextRequest) {
     }
 
     const effectiveRole = currentEmployee.role || (isSuperAdmin ? 'superadmin' : 'employee')
-    const effectiveUnitId = currentEmployee.unit_id
+    let effectiveUnitId = currentEmployee.unit_id
 
     const { searchParams } = new URL(request.url)
     const employeeId = searchParams.get('employee_id')
@@ -257,6 +292,19 @@ export async function GET(request: NextRequest) {
 
     if (!period) {
       return NextResponse.json({ error: 'Period is required' }, { status: 400 })
+    }
+
+    // Resolve manager's unit in snapshot for this period if applicable
+    if (effectiveRole === 'unit_manager' && currentEmployee.id && period) {
+      const { data: snapManager } = await fetchClient
+        .from('t_employee_period_snapshots')
+        .select('unit_id')
+        .eq('period', period)
+        .eq('employee_id', currentEmployee.id)
+        .maybeSingle()
+      if (snapManager?.unit_id) {
+        effectiveUnitId = snapManager.unit_id
+      }
     }
 
     if (employeeId) {

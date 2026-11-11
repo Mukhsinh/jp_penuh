@@ -156,11 +156,11 @@ export default function AssessmentTable({
                         {employee.is_contract && (
                           isPartialEligibleUnit(employee.unit_id, employee.unit_name) ? (
                             <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300 text-[10px] py-0 px-2 font-semibold">
-                              Sebagian ({employee.contract_percentage || 80}%)
+                              Sebagian ({employee.contract_percentage !== undefined && employee.contract_percentage !== null ? employee.contract_percentage : 80}%)
                             </Badge>
                           ) : (
                             <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] py-0 px-1.5 font-normal">
-                              Kontrak ({employee.contract_percentage || 80}%)
+                              Kontrak ({employee.contract_percentage !== undefined && employee.contract_percentage !== null ? employee.contract_percentage : 80}%)
                             </Badge>
                           )
                         )}

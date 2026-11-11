@@ -24,6 +24,39 @@ export async function GET(request: NextRequest) {
 
     const userRole = user.user_metadata?.role
 
+    // Preload period snapshot if available to strictly respect period assignments
+    const { data: snapData } = await adminClient
+      .from('t_employee_period_snapshots')
+      .select('employee_id, full_name, employee_code, unit_id, m_units(name)')
+      .eq('period', period)
+
+    const snapMap = new Map<string, any>()
+    snapData?.forEach((s: any) => {
+      snapMap.set(s.employee_id, {
+        full_name: s.full_name,
+        employee_code: s.employee_code,
+        unit_id: s.unit_id,
+        unit_name: (Array.isArray(s.m_units) ? s.m_units[0]?.name : s.m_units?.name) || '-'
+      })
+    })
+
+    // Determine target unit filter
+    let targetUnitId: string | null = (unitId && unitId !== 'all') ? unitId : null
+    if (userRole === 'unit_manager') {
+      let mgrUnitId = user.user_metadata?.unit_id
+      if (snapMap.has(user.id)) {
+        mgrUnitId = snapMap.get(user.id).unit_id
+      } else {
+        const { data: userEmployee } = await adminClient
+          .from('m_employees')
+          .select('unit_id')
+          .eq('user_id', user.id)
+          .single()
+        if (userEmployee) mgrUnitId = userEmployee.unit_id
+      }
+      targetUnitId = mgrUnitId
+    }
+
     // Build query for assessment data
     let query = adminClient
       .from('t_kpi_assessments')
@@ -52,21 +85,18 @@ export async function GET(request: NextRequest) {
         )
       `)
       .eq('period', period)
-      .order('m_employees(full_name)')
 
-    // Apply unit filtering based on role
-    if (userRole === 'unit_manager') {
-      const { data: userEmployee } = await adminClient
-        .from('m_employees')
-        .select('unit_id')
-        .eq('user_id', user.id)
-        .single()
-
-      if (userEmployee) {
-        query = query.eq('m_employees.unit_id', userEmployee.unit_id)
+    if (targetUnitId) {
+      if (snapData && snapData.length > 0) {
+        const allowedEmpIds = snapData.filter((s: any) => s.unit_id === targetUnitId).map((s: any) => s.employee_id)
+        if (allowedEmpIds.length > 0) {
+          query = query.in('employee_id', allowedEmpIds)
+        } else {
+          query = query.eq('employee_id', '00000000-0000-0000-0000-000000000000') // empty
+        }
+      } else {
+        query = query.eq('m_employees.unit_id', targetUnitId)
       }
-    } else if (unitId && unitId !== 'all') {
-      query = query.eq('m_employees.unit_id', unitId)
     }
 
     const { data: assessmentData, error } = await query
@@ -83,26 +113,29 @@ export async function GET(request: NextRequest) {
     const workbook = XLSX.utils.book_new()
 
     // Sheet 1: Detail Penilaian
-    const detailData = assessmentData.map((assessment: any) => ({
-      'Periode': assessment.period,
-      'Unit': assessment.m_employees?.m_units?.name || '-',
-      'NIP': assessment.m_employees?.employee_id || '-',
-      'Nama Pegawai': assessment.m_employees?.full_name || '-',
-      'Kategori KPI': assessment.m_kpi_indicators?.m_kpi_categories?.category || '-',
-      'Nama Kategori': assessment.m_kpi_indicators?.m_kpi_categories?.category_name || '-',
-      'Kode Indikator': assessment.m_kpi_indicators?.code || '-',
-      'Nama Indikator': assessment.m_kpi_indicators?.name || '-',
-      'Satuan': assessment.m_kpi_indicators?.measurement_unit || '-',
-      'Target': assessment.target_value,
-      'Realisasi': assessment.realization_value,
-      'Pencapaian (%)': assessment.achievement_percentage?.toFixed(2) || '0.00',
-      'Bobot (%)': assessment.weight_percentage,
-      'Skor': assessment.score?.toFixed(2) || '0.00',
-      'Catatan': assessment.notes || '-',
-      'Penilai': assessment.assessor?.email || 'Unknown',
-      'Tanggal Penilaian': assessment.created_at ? new Date(assessment.created_at).toLocaleDateString('id-ID') : '-',
-      'Terakhir Diubah': assessment.updated_at ? new Date(assessment.updated_at).toLocaleDateString('id-ID') : '-'
-    }))
+    const detailData = assessmentData.map((assessment: any) => {
+      const snap = snapMap.get(assessment.employee_id)
+      return {
+        'Periode': assessment.period,
+        'Unit': snap?.unit_name || assessment.m_employees?.m_units?.name || '-',
+        'NIP': snap?.employee_code || assessment.m_employees?.employee_id || '-',
+        'Nama Pegawai': snap?.full_name || assessment.m_employees?.full_name || '-',
+        'Kategori KPI': assessment.m_kpi_indicators?.m_kpi_categories?.category || '-',
+        'Nama Kategori': assessment.m_kpi_indicators?.m_kpi_categories?.category_name || '-',
+        'Kode Indikator': assessment.m_kpi_indicators?.code || '-',
+        'Nama Indikator': assessment.m_kpi_indicators?.name || '-',
+        'Satuan': assessment.m_kpi_indicators?.measurement_unit || '-',
+        'Target': assessment.target_value,
+        'Realisasi': assessment.realization_value,
+        'Pencapaian (%)': assessment.achievement_percentage?.toFixed(2) || '0.00',
+        'Bobot (%)': assessment.weight_percentage,
+        'Skor': assessment.score?.toFixed(2) || '0.00',
+        'Catatan': assessment.notes || '-',
+        'Penilai': assessment.assessor?.email || 'Unknown',
+        'Tanggal Penilaian': assessment.created_at ? new Date(assessment.created_at).toLocaleDateString('id-ID') : '-',
+        'Terakhir Diubah': assessment.updated_at ? new Date(assessment.updated_at).toLocaleDateString('id-ID') : '-'
+      }
+    })
 
     const detailSheet = XLSX.utils.json_to_sheet(detailData)
     detailSheet['!cols'] = [
@@ -116,11 +149,12 @@ export async function GET(request: NextRequest) {
     const employeeSummaryMap = new Map()
     assessmentData.forEach((assessment: any) => {
       const employeeId = assessment.employee_id
+      const snap = snapMap.get(employeeId)
       if (!employeeSummaryMap.has(employeeId)) {
         employeeSummaryMap.set(employeeId, {
-          unit: assessment.m_employees?.m_units?.name || '-',
-          nip: assessment.m_employees?.employee_id || '-',
-          nama: assessment.m_employees?.full_name || '-',
+          unit: snap?.unit_name || assessment.m_employees?.m_units?.name || '-',
+          nip: snap?.employee_code || assessment.m_employees?.employee_id || '-',
+          nama: snap?.full_name || assessment.m_employees?.full_name || '-',
           p1_scores: [],
           p2_scores: [],
           p3_scores: [],
@@ -194,7 +228,8 @@ export async function GET(request: NextRequest) {
     if (!unitId || unitId === 'all') {
       const unitSummaryMap = new Map()
       assessmentData.forEach((assessment: any) => {
-        const unitName = assessment.m_employees?.m_units?.name || 'Unknown'
+        const snap = snapMap.get(assessment.employee_id)
+        const unitName = snap?.unit_name || assessment.m_employees?.m_units?.name || 'Unknown'
         if (!unitSummaryMap.has(unitName)) {
           unitSummaryMap.set(unitName, {
             employees: new Set(),

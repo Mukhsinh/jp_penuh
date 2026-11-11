@@ -24,6 +24,8 @@ export async function POST(request: NextRequest) {
     let contentType: string
     let filename: string
 
+    const revSuffix = revenueType ? `-${revenueType}` : ''
+
     if (format === 'excel') {
       buffer = await exportToExcel({
         reportType,
@@ -32,7 +34,7 @@ export async function POST(request: NextRequest) {
         revenueType,
       })
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      filename = `${reportType}-${period}.xlsx`
+      filename = `${reportType}-${period}${revSuffix}.xlsx`
     } else if (format === 'pdf') {
       buffer = await exportToPDF({
         reportType,
@@ -41,7 +43,7 @@ export async function POST(request: NextRequest) {
         revenueType,
       })
       contentType = 'application/pdf'
-      filename = `${reportType}-${period}.pdf`
+      filename = `${reportType}-${period}${revSuffix}.pdf`
     } else {
       return NextResponse.json(
         { error: 'Invalid format' },

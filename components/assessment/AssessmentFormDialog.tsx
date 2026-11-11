@@ -149,8 +149,10 @@ export default function AssessmentFormDialog({
       if (isEligible) {
         const hasSavedPartial = Boolean(employee?.is_partial || (employee?.is_contract && !isMedicalUnit))
         setIsPartial(hasSavedPartial)
-        const savedPct = employee?.partial_percentage ?? (employee?.is_contract && !isMedicalUnit ? employee?.contract_percentage : 80)
-        setPartialPercentage(Number(savedPct || 80))
+        const savedPct = employee?.partial_percentage !== undefined && employee?.partial_percentage !== null
+          ? employee.partial_percentage
+          : (employee?.is_contract && !isMedicalUnit ? employee?.contract_percentage : 80)
+        setPartialPercentage(savedPct !== undefined && savedPct !== null && !isNaN(Number(savedPct)) ? Number(savedPct) : 80)
       } else {
         setIsPartial(false)
         setPartialPercentage(80)
@@ -288,7 +290,10 @@ export default function AssessmentFormDialog({
               s => s.sub_indicator_id === item.sub_indicator_id
             )
             const subRealiz = Number(item.realization_value) || 0
-            const subSc = Number(item.score || 0)
+            let subSc = Number(item.score || 0)
+            if (subSc === 0 && subRealiz > 0) {
+              subSc = subRealiz
+            }
             if (existingSubIndex >= 0) {
               assessmentMap[indicatorId].sub_assessments[existingSubIndex] = {
                 id: item.id,
@@ -309,9 +314,14 @@ export default function AssessmentFormDialog({
           } else {
             // Main indicator row
             assessmentMap[indicatorId].id = item.id
-            assessmentMap[indicatorId].realization_value = Number(item.realization_value) || 0
+            const mRealiz = Number(item.realization_value) || 0
+            let mScore = Number(item.score) || 0
+            if (mScore === 0 && mRealiz > 0) {
+              mScore = mRealiz
+            }
+            assessmentMap[indicatorId].realization_value = mRealiz
             assessmentMap[indicatorId].achievement_percentage = Number(item.achievement_percentage) || 0
-            assessmentMap[indicatorId].score = Number(item.score) || 0
+            assessmentMap[indicatorId].score = mScore
             assessmentMap[indicatorId].notes = item.notes || ''
           }
         })
@@ -320,8 +330,8 @@ export default function AssessmentFormDialog({
         // for all configured sub-indicators and populates orphan main rows
         const allIndicators = loadedCategories.flatMap(c => c.indicators)
         for (const indicator of allIndicators) {
+          const assessment = assessmentMap[indicator.id]
           if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
-            const assessment = assessmentMap[indicator.id]
             if (assessment) {
               // Populate sub_assessments from main row realization_value if sub_assessments is empty
               if (assessment.sub_assessments.length === 0 && assessment.realization_value !== 0) {
@@ -348,6 +358,53 @@ export default function AssessmentFormDialog({
                   })
                 }
               }
+
+              // Re-calculate sub.score and assessment.score if score is 0
+              let sumScores = 0
+              let isQuantitativeIndicator = false
+              assessment.sub_assessments.forEach(sub => {
+                const subConfig = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+                const isQuant = subConfig?.measurement_type === 'quantitative'
+                if (isQuant) isQuantitativeIndicator = true
+                const tariff = Number(subConfig?.base_index_value || 1)
+                if (isQuant) {
+                  const realScore = (sub.realization_value || 0) * tariff
+                  if (!sub.score || sub.score === 0 || (tariff > 1 && sub.score === sub.realization_value)) {
+                    sub.score = realScore
+                  }
+                  sumScores += sub.score
+                } else {
+                  if (!sub.score || sub.score === 0) {
+                    sub.score = sub.realization_value || 0
+                  }
+                  const w = isMedicalUnit ? 1 : (subConfig ? (Number(subConfig.weight_percentage || 0) / 100) : 0)
+                  sumScores += sub.score * w
+                }
+              })
+
+              if (sumScores > 0 || (assessment.score === 0 && assessment.realization_value > 0)) {
+                assessment.score = sumScores > 0 ? sumScores : assessment.realization_value
+                assessment.achievement_percentage = (isMedicalUnit || isQuantitativeIndicator || indicator.calculation_method === 'priority') ? 100 : Math.min(100, sumScores)
+              }
+            }
+          } else if (assessment) {
+            // Single indicator
+            if ((assessment.score === 0 || !assessment.score) && assessment.realization_value > 0) {
+              if (indicator.calculation_method === 'priority') {
+                const tariff = Number(indicator.base_index_value || 1)
+                assessment.score = assessment.realization_value * tariff
+                assessment.achievement_percentage = 100
+              } else {
+                const target = getIndicatorTarget(indicator)
+                if (target > 0) {
+                  const ach = (assessment.realization_value / target) * 100
+                  assessment.achievement_percentage = Number(ach.toFixed(2))
+                  assessment.score = Math.min(ach, 100)
+                } else {
+                  assessment.score = assessment.realization_value
+                  assessment.achievement_percentage = 100
+                }
+              }
             }
           }
         }
@@ -371,10 +428,104 @@ export default function AssessmentFormDialog({
     return achievementPercentage >= 100 ? 100 : achievementPercentage
   }
 
+  const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
+
+  const getIndicatorScore = (indicator: KPIIndicator, assessment?: AssessmentState): number => {
+    if (!assessment) return 0
+
+    const isPriority = indicator.calculation_method === 'priority'
+    const hasSubs = Boolean(indicator.sub_indicators && indicator.sub_indicators.length > 0)
+
+    if (hasSubs) {
+      let calcSum = 0
+      let hasAnySub = false
+      ;(indicator.sub_indicators || []).forEach(subConf => {
+        const sub = assessment.sub_assessments?.find(s => s.sub_indicator_id === subConf.id)
+        if (!sub) return
+        hasAnySub = true
+        const isQuant = subConf.measurement_type === 'quantitative'
+        const realVal = Number(sub.realization_value || 0)
+        let subScore = Number(sub.score || 0)
+
+        if (isQuant) {
+          const tariff = Number(subConf.base_index_value || 1)
+          const expectedScore = realVal * tariff
+          if (subScore === 0 || Math.abs(subScore - expectedScore) > 0.0001) {
+            subScore = expectedScore
+          }
+          calcSum += subScore
+        } else if (isPriority) {
+          const baseVal = Number(subConf.base_index_value || 0)
+          let val = (subScore !== 0) ? subScore : realVal
+          if (baseVal > 1 && val <= 10 && val < baseVal) {
+            val = val * baseVal
+          }
+          calcSum += val
+        } else {
+          // Qualitative non-priority
+          const val = (subScore !== 0) ? subScore : realVal
+          const w = isMedicalUnit ? 1 : (Number(subConf.weight_percentage || 0) / 100)
+          calcSum += val * w
+        }
+      })
+
+      if (hasAnySub && calcSum > 0) return calcSum
+      if (assessment.score !== undefined && assessment.score !== null && assessment.score !== 0) {
+        return Number(assessment.score)
+      }
+      return Number(assessment.realization_value || 0)
+    }
+
+    // Single indicator (no sub-indicators)
+    const target = getIndicatorTarget(indicator)
+    const realVal = Number(assessment.realization_value || 0)
+    const rawScore = Number(assessment.score || 0)
+
+    if (isPriority) {
+      const tariff = Number(indicator.base_index_value || 1)
+      if (tariff > 1 && (rawScore === 0 || rawScore === realVal) && realVal <= 10) {
+        return realVal * tariff
+      }
+      if (rawScore !== 0) return rawScore
+      return realVal * tariff
+    }
+
+    if (target > 0) {
+      if (rawScore !== 0) return rawScore
+      const ach = calculateAchievement(realVal, target)
+      return calculateScore(ach)
+    }
+
+    // target === 0 (qualitative / scoring rubrics)
+    if (rawScore !== 0) return rawScore
+    return realVal
+  }
+
+  const getIndicatorDisplayedScore = (indicator: KPIIndicator, category: KPICategory, rawScore: number): number => {
+    const isPriority = indicator.calculation_method === 'priority'
+    if (isPriority) {
+      return rawScore
+    }
+
+    const isWeighted = !isMedicalUnit && category.is_weighted !== false
+    let baseScore = rawScore
+    if (isWeighted) {
+      const indWeight = Number(indicator.weight_percentage || 0) / 100
+      const catWeight = Number(category.weight_percentage || 0) / 100
+      baseScore = rawScore * indWeight * catWeight
+    }
+
+    const isPartialActive = showPartialFeature && isPartial
+    const effectiveMultiplier = isMedicalUnit && isContract
+      ? (Math.max(0, !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 0) / 100)
+      : (isPartialActive ? (Math.max(0, !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 0) / 100) : 1)
+
+    return round2(baseScore * effectiveMultiplier)
+  }
+
   const handleRealizationChange = (indicatorId: string, value: string, targetValue: number) => {
     const indicator = categories.flatMap(c => c.indicators).find(i => i.id === indicatorId)
     const category = categories.find(c => c.indicators.some(i => i.id === indicatorId))
-    const isActivity = category?.configuration_style === 'activity'
 
     // For qualitative/regular, realizationValue is the input.
     // For activity Medis without sub_indicators, realizationValue is the VOLUME input.
@@ -386,20 +537,20 @@ export default function AssessmentFormDialog({
 
     if (indicator) {
       const isPriority = indicator.calculation_method === 'priority'
-      const isUnweightedCat = category?.is_weighted === false
 
       if (isPriority) {
         const tariff = parseFloat(indicator.base_index_value?.toString() || '0')
-        score = inputRealization * tariff
+        score = tariff > 0 ? inputRealization * tariff : inputRealization
         derivedRealizationValue = inputRealization
         achievementPercentage = 100
       } else {
-        achievementPercentage = calculateAchievement(inputRealization, targetValue)
-        // Score logic: if unweighted category, score is achievement, else it's weighted if needed?
-        // Wait, 'score' in t_kpi_assessments for indexing indicators is usually achievement 
-        // because the PIR calculation handles the weighting at the unit level.
-        // Actually, existing code says: score = calculateScore(achievementPercentage)
-        score = calculateScore(achievementPercentage)
+        if (targetValue > 0) {
+          achievementPercentage = calculateAchievement(inputRealization, targetValue)
+          score = calculateScore(achievementPercentage)
+        } else {
+          achievementPercentage = 100
+          score = inputRealization
+        }
       }
     }
 
@@ -458,17 +609,23 @@ export default function AssessmentFormDialog({
         // Bottom-up logic: Sum (Skor * Bobot)
         subAssessments.forEach(sub => {
           const subConfig = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
-          if (subConfig?.measurement_type === 'quantitative') isQuantitativeIndicator = true
+          const isQuant = subConfig?.measurement_type === 'quantitative'
+          if (isQuant) isQuantitativeIndicator = true
+
+          const tariff = Number(subConfig?.base_index_value || 1)
+          const subSc = isQuant
+            ? ((sub.score !== undefined && sub.score !== null && sub.score !== 0) ? sub.score : (sub.realization_value || 0) * tariff)
+            : ((sub.score !== undefined && sub.score !== null && sub.score !== 0) ? sub.score : (sub.realization_value || 0))
 
           // For quantitative/activity, weight acts as 1 (so volume*tariff adds up directly)
-          const weight = (isMedicalUnit || isQuantitativeIndicator) ? 1 : (subConfig ? (subConfig.weight_percentage / 100) : 0)
-          sumScores += (sub.score || 0) * weight
+          const weight = (isMedicalUnit || isQuantitativeIndicator) ? 1 : (subConfig ? (Number(subConfig.weight_percentage || 0) / 100) : 0)
+          sumScores += subSc * weight
           sumVolumes += (sub.realization_value || 0)
         })
 
         const maxTarget = getIndicatorTarget(indicator)
 
-        if (isQuantitativeIndicator || isMedicalUnit) {
+        if (isQuantitativeIndicator || isMedicalUnit || maxTarget === 0) {
           totalAchievement = 100 // Placeholder visual
         } else {
           totalAchievement = maxTarget > 0 ? (sumScores / maxTarget) * 100 : sumScores
@@ -483,7 +640,9 @@ export default function AssessmentFormDialog({
 
       // If qualitative sub-indicators without target, use sum of scores without cap.
       const maxTarget = indicator ? getIndicatorTarget(indicator) : 0
-      const finalScore = isPriority ? Number(sumScores.toFixed(4)) : (indicator && indicator.sub_indicators.length > 0 && maxTarget === 0 ? Number(sumScores.toFixed(4)) : calculateScore(totalAchievement))
+      const finalScore = isPriority
+        ? Number(sumScores.toFixed(4))
+        : (indicator && indicator.sub_indicators.length > 0 && maxTarget === 0 ? Number(sumScores.toFixed(4)) : (maxTarget > 0 ? calculateScore(totalAchievement) : sumScores))
 
       return {
         ...prev,
@@ -535,7 +694,7 @@ export default function AssessmentFormDialog({
             const isQuant = subConfig.measurement_type === 'quantitative'
             const calculatedScore = isQuant
               ? Number((realVal * (Number(subConfig.base_index_value) || 0)).toFixed(4))
-              : (existing?.score ?? (indicator.sub_indicators.length === 1 && (assessment.score || assessment.realization_value) ? (assessment.score || assessment.realization_value) : 0))
+              : ((existing?.score !== undefined && existing?.score !== null && existing?.score !== 0) ? existing.score : realVal)
             return {
               id: existing?.id,
               sub_indicator_id: subConfig.id,
@@ -547,6 +706,8 @@ export default function AssessmentFormDialog({
             }
           })
 
+          const calculatedMainScore = getIndicatorScore(indicator, assessment)
+
           return {
             id: assessment.id,
             employee_id: employee.employee_id,
@@ -556,13 +717,13 @@ export default function AssessmentFormDialog({
             target_value: getIndicatorTarget(indicator),
             weight_percentage: indicator.weight_percentage,
             notes: assessment.notes,
-            score: assessment.score,
+            score: calculatedMainScore,
             revenue_type: activeRevenueType,
             sub_assessments: fullSubAssessments,
             is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
             contract_percentage: isMedicalUnit
-              ? (isContract ? Number(contractPercentage || 100) : 100)
-              : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100)
+              ? (isContract ? (contractPercentage !== undefined && contractPercentage !== null && !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 100) : 100)
+              : (showPartialFeature ? (isPartial ? (partialPercentage !== undefined && partialPercentage !== null && !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 100) : 100) : 100)
           }
         })
       )
@@ -577,8 +738,8 @@ export default function AssessmentFormDialog({
           apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
           is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
           contract_percentage: isMedicalUnit
-            ? (isContract ? Number(contractPercentage || 100) : 100)
-            : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
+            ? (isContract ? (contractPercentage !== undefined && contractPercentage !== null && !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 100) : 100)
+            : (showPartialFeature ? (isPartial ? (partialPercentage !== undefined && partialPercentage !== null && !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 100) : 100) : 100),
           employee_id: employee.employee_id
         })
       })
@@ -710,8 +871,8 @@ export default function AssessmentFormDialog({
                 revenue_type: activeRevenueType,
                 is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
                 contract_percentage: isMedicalUnit
-                  ? (isContract ? Number(contractPercentage || 100) : 100)
-                  : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
+                  ? (isContract ? (contractPercentage !== undefined && contractPercentage !== null && !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 100) : 100)
+                  : (showPartialFeature ? (isPartial ? (partialPercentage !== undefined && partialPercentage !== null && !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 100) : 100) : 100),
                 assessor_id: '' // API will handle this from session
               }
             })
@@ -725,8 +886,8 @@ export default function AssessmentFormDialog({
               apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false,
               is_contract: isMedicalUnit ? isContract : (showPartialFeature ? isPartial : false),
               contract_percentage: isMedicalUnit
-                ? (isContract ? Number(contractPercentage || 100) : 100)
-                : (showPartialFeature ? (isPartial ? Number(partialPercentage || 100) : 100) : 100),
+                ? (isContract ? (contractPercentage !== undefined && contractPercentage !== null && !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 100) : 100)
+                : (showPartialFeature ? (isPartial ? (partialPercentage !== undefined && partialPercentage !== null && !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 100) : 100) : 100),
               employee_id: employee.employee_id
             })
           })
@@ -849,117 +1010,56 @@ export default function AssessmentFormDialog({
 
           let totalSkorIndeks = 0;
           let totalSkorPrioritas = 0;
-          const round2 = (num: number) => Number((Math.round((num + 1e-9) * 100) / 100).toFixed(2))
 
+          // 1. Calculate Priority total across all categories
           categories.forEach(category => {
             category.indicators.forEach(indicator => {
-              const assessment = assessments[indicator.id]
-              const isPriority = indicator.calculation_method === 'priority'
-              if (isPriority) {
-                if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
-                  let subPrioSum = 0
-                  let hasSubData = false
-                  ;(assessment?.sub_assessments || []).forEach(sub => {
-                    const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
-                    if (subConf) {
-                      hasSubData = true
-                      const subVal = (sub.score !== undefined && sub.score !== null && sub.score !== 0)
-                        ? sub.score
-                        : (Number(sub.realization_value) || 0)
-                      subPrioSum += subVal
-                    }
-                  })
-                  totalSkorPrioritas += hasSubData ? subPrioSum : (assessment?.score || assessment?.realization_value || 0)
-                } else {
-                  totalSkorPrioritas += assessment ? (assessment.score || assessment.realization_value || 0) : 0
-                }
+              if (indicator.calculation_method === 'priority') {
+                const assessment = assessments[indicator.id]
+                totalSkorPrioritas += getIndicatorScore(indicator, assessment)
               }
             })
           })
+
+          const isPartialActive = showPartialFeature && isPartial;
+          const effectiveMultiplier = isMedicalUnit && isContract
+            ? (Math.max(0, !isNaN(Number(contractPercentage)) ? Number(contractPercentage) : 0) / 100)
+            : (isPartialActive ? (Math.max(0, !isNaN(Number(partialPercentage)) ? Number(partialPercentage) : 0) / 100) : 1);
 
           const pCards = ['P1', 'P2', 'P3'].map((catCode) => {
             const category = categories.find(c => c.category === catCode)
             if (!category) return null
 
+            let rawCategoryTotal = 0
             let totalRealisasiKategori = 0
             let totalTargetKategori = 0
 
             category.indicators.forEach(indicator => {
+              if (indicator.calculation_method === 'priority') return
+
               const assessment = assessments[indicator.id]
-              const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
+              const indScore = getIndicatorScore(indicator, assessment)
+              const indWeight = parseFloat(indicator.weight_percentage?.toString() || '0')
               const indTarget = getIndicatorTarget(indicator)
-              let indRealisasi = assessment ? assessment.realization_value : 0
-              const isPriority = indicator.calculation_method === 'priority'
+              const indRealisasi = assessment ? assessment.realization_value : 0
 
-              // For indicators with sub-indicators (e.g. BOR with 80% and 20% weights),
-              // use the weighted score calculated from sub-indicators to match report formula exactly.
-              if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
-                let calcSum = 0
-                let hasSubData = false
-                ;(assessment?.sub_assessments || []).forEach(sub => {
-                  const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
-                  if (subConf) {
-                    hasSubData = true
-                    const isQuant = subConf.measurement_type === 'quantitative'
-                    let subScore = Number(sub.score || 0)
-                    if (isQuant) {
-                      const tariff = Number(subConf.base_index_value || 1)
-                      const realScore = Number(sub.realization_value || 0) * tariff
-                      if (subScore === 0 || (realScore > 0 && Math.abs(subScore - realScore) > 0.0001)) {
-                        subScore = realScore
-                      }
-                    }
-                    const w = (isMedicalUnit || isQuant) ? 1 : (subConf.weight_percentage / 100)
-                    calcSum += subScore * w
-                  }
-                })
-                if (hasSubData) {
-                  indRealisasi = calcSum
-                } else if (assessment?.score !== undefined && assessment?.score !== null && assessment?.score !== 0) {
-                  indRealisasi = assessment.score
-                }
+              let indContrib = 0
+              if (!isMedicalUnit && category.is_weighted !== false) {
+                const catWeight = parseFloat(category.weight_percentage?.toString() || '0')
+                indContrib = indScore * (indWeight / 100) * (catWeight / 100)
+              } else {
+                indContrib = indScore
               }
 
-              if (!isPriority) {
-                if (category.is_weighted !== false) {
-                  totalRealisasiKategori += (indRealisasi * (indWeight / 100))
-                  totalTargetKategori += (indTarget * (indWeight / 100))
-                } else {
-                  // Unweighted category: sum indicators as raw achievement vs 100, or raw points if target=0
-                  const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : indRealisasi
-                  totalRealisasiKategori += ach
-                  if (indTarget > 0) {
-                    totalTargetKategori += 100
-                  }
-                }
-              }
+              rawCategoryTotal += indContrib
+              totalRealisasiKategori += (indRealisasi * (indWeight / 100))
+              totalTargetKategori += (indTarget * (indWeight / 100))
             })
 
             const porsiKategori = category.weight_percentage
-            let kontribusiAkhir = 0
-            if (totalTargetKategori > 0) {
-              if (category.is_weighted !== false) {
-                kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * porsiKategori
-              } else {
-                // For unweighted, the "contribution" is just the average achievement percentage
-                kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
-              }
-            } else {
-              if (category.is_weighted !== false) {
-                kontribusiAkhir = totalRealisasiKategori * (porsiKategori / 100)
-              } else {
-                kontribusiAkhir = totalRealisasiKategori
-              }
-            }
-
-            const isPartialActive = showPartialFeature && isPartial;
-            const effectiveMultiplier = isMedicalUnit && isContract
-              ? (Math.max(0, Number(contractPercentage) || 0) / 100)
-              : (isPartialActive ? (Math.max(0, Number(partialPercentage) || 0) / 100) : 1);
-
-            const rawPoinAkhir = round2(isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir);
-            const poinAkhir = round2(rawPoinAkhir * effectiveMultiplier);
-            totalSkorIndeks += poinAkhir;
+            const rawPoinAkhir = round2(rawCategoryTotal)
+            const poinAkhir = round2(rawCategoryTotal * effectiveMultiplier)
+            totalSkorIndeks += poinAkhir
 
             return (
               <Card key={catCode} className="border-gray-200">
@@ -982,7 +1082,7 @@ export default function AssessmentFormDialog({
                       <span className="text-amber-700 font-medium">Asli: {formatDecimal(rawPoinAkhir, 2)} (x {partialPercentage}%)</span>
                     ) : totalTargetKategori > 0
                       ? `${formatDecimal(totalRealisasiKategori, 2)} / ${formatDecimal(totalTargetKategori, 2)}`
-                      : `${formatDecimal(totalRealisasiKategori, 2)} Poin`}
+                      : `${formatDecimal(rawPoinAkhir, 2)} Poin`}
                   </div>
                 </CardContent>
               </Card>
@@ -1105,37 +1205,14 @@ export default function AssessmentFormDialog({
                   <div className="space-y-6">
                     {category.indicators.map((indicator) => {
                       const assessment = assessments[indicator.id]
-                      let realizationValue = assessment?.realization_value || 0
-                      let achievementPct = assessment?.achievement_percentage || 0
-                      let score = assessment?.score || 0
+                      const score = getIndicatorScore(indicator, assessment)
+                      const displayedScore = getIndicatorDisplayedScore(indicator, category, score)
                       const hasSubIndicators = indicator.sub_indicators && indicator.sub_indicators.length > 0
-
-                      // Workaround: Re-hydrate zeroed generated columns from DB using the preserved realization_values
-                      if (hasSubIndicators && getIndicatorTarget(indicator) === 0) {
-                        let calcSum = 0;
-                        let isQuant = false;
-                        (assessment?.sub_assessments || []).forEach(sub => {
-                          const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
-                          if (subConf?.measurement_type === 'quantitative') {
-                            isQuant = true;
-                            calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
-                          } else {
-                            const w = (isMedicalUnit || isQuant) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
-                            calcSum += (sub.realization_value || 0) * w
-                          }
-                        })
-                        achievementPct = (isMedicalUnit || isQuant || indicator.calculation_method === 'priority') ? 100 : calcSum;
-                        score = calcSum;
-                      }
-
-                      let displayedScore = score
-                      if (!isMedicalUnit && category.is_weighted !== false && indicator.calculation_method !== 'priority') {
-                        const catWeight = category.weight_percentage || 0
-                        displayedScore = score * (indicator.weight_percentage / 100) * (catWeight / 100)
-                      }
-                      if (showPartialFeature && isPartial) {
-                        displayedScore = round2(displayedScore * (Math.max(0, Number(partialPercentage) || 0) / 100))
-                      }
+                      const target = getIndicatorTarget(indicator)
+                      const realizationValue = assessment?.realization_value || 0
+                      const achievementPct = (indicator.calculation_method === 'priority' || target === 0)
+                        ? 100
+                        : (assessment?.achievement_percentage || calculateAchievement(realizationValue, target))
 
                       return (
                         <div key={indicator.id} className="border rounded-lg p-4 space-y-4">
@@ -1239,10 +1316,9 @@ export default function AssessmentFormDialog({
                                     const tariff = Number(sub.base_index_value) || 0
                                     subScore = Number((subRealization * tariff).toFixed(4))
                                   } else {
-                                    subScore = subAssessment?.score ?? ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.score) ? assessment.score : 0)
-                                    if (subAssessment && !subAssessment.score && subRealization > 0) {
-                                      subScore = subRealization
-                                    }
+                                    subScore = (subAssessment?.score !== undefined && subAssessment.score !== null && subAssessment.score !== 0)
+                                      ? subAssessment.score
+                                      : ((!subAssessment && indicator.sub_indicators.length === 1 && assessment?.score) ? assessment.score : subRealization)
                                   }
 
                                   const hasCriteria = !isQuantitative && sub.scoring_criteria && sub.scoring_criteria.length > 0
@@ -1556,13 +1632,18 @@ export default function AssessmentFormDialog({
                       step="any"
                       min="0"
                       max="100"
-                      value={partialPercentage === 0 ? '' : partialPercentage}
+                      value={partialPercentage ?? ''}
                       onChange={(e) => {
-                        const val = parseFloat(e.target.value)
-                        setPartialPercentage(isNaN(val) ? 0 : val)
+                        const raw = e.target.value
+                        if (raw === '') {
+                          setPartialPercentage(0)
+                        } else {
+                          const val = parseFloat(raw)
+                          setPartialPercentage(isNaN(val) ? 0 : Math.max(0, Math.min(100, val)))
+                        }
                       }}
                       disabled={isApproved || saving}
-                      placeholder="Contoh: 50"
+                      placeholder="0"
                       className="h-7 w-20 text-xs bg-white text-center font-bold pr-5 border-amber-400 focus:border-amber-600 focus:ring-amber-500 shadow-sm"
                     />
                     <span className="absolute right-2 text-xs font-bold text-gray-500 pointer-events-none">%</span>
@@ -1570,7 +1651,7 @@ export default function AssessmentFormDialog({
 
                   {/* Preset quick buttons */}
                   <div className="flex items-center gap-1">
-                    {[25, 50, 75, 80].map((preset) => (
+                    {[0, 25, 50, 75, 80].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -1597,7 +1678,7 @@ export default function AssessmentFormDialog({
 
             {isPartial && (
               <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-400 text-xs font-bold">
-                Pengali Aktif: {((Number(partialPercentage) || 0) / 100).toFixed(2)}x
+                Pengali Aktif: {((partialPercentage !== undefined && !isNaN(Number(partialPercentage)) ? Math.max(0, Number(partialPercentage)) : 0) / 100).toFixed(2)}x
               </Badge>
             )}
           </div>

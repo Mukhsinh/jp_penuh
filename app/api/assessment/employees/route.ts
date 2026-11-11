@@ -129,6 +129,20 @@ export async function GET(request: NextRequest) {
 
     const useSnapshot = Boolean(snapCount && snapCount > 0)
 
+    // For unit manager, resolve assigned unit for this period if snapshot is used
+    let effectiveUserUnitId = userUnitId
+    if (useSnapshot && userRole === 'unit_manager' && currentEmployee.id) {
+      const { data: snapManager } = await adminClient
+        .from('t_employee_period_snapshots')
+        .select('unit_id')
+        .eq('period', period)
+        .eq('employee_id', currentEmployee.id)
+        .maybeSingle()
+      if (snapManager?.unit_id) {
+        effectiveUserUnitId = snapManager.unit_id
+      }
+    }
+
     let empQuery = useSnapshot
       ? adminClient
           .from('t_employee_period_snapshots')
@@ -139,7 +153,9 @@ export async function GET(request: NextRequest) {
               role,
               is_contract,
               contract_percentage,
-              m_units!inner (
+              is_active,
+              m_units (
+                id,
                 name,
                 code
               )
@@ -156,7 +172,9 @@ export async function GET(request: NextRequest) {
               role,
               is_contract,
               contract_percentage,
-              m_units!inner (
+              is_active,
+              m_units (
+                id,
                 name,
                 code
               )
@@ -169,18 +187,35 @@ export async function GET(request: NextRequest) {
       empQuery = empQuery.not('unit_id', 'in', `(${adminUnitIds.join(',')})`)
     }
 
-    if (userRole === 'unit_manager' && userUnitId) {
-      // Unit manager is strictly restricted to their own assigned unit
-      empQuery = empQuery.eq('unit_id', userUnitId)
+    if (userRole === 'unit_manager' && effectiveUserUnitId) {
+      // Unit manager is strictly restricted to their own assigned unit for this period
+      empQuery = empQuery.eq('unit_id', effectiveUserUnitId)
     } else if (requestedUnitId && requestedUnitId !== 'all') {
       empQuery = empQuery.eq('unit_id', requestedUnitId)
     }
 
     const { data: rawDirectEmps, error: directErr } = await empQuery.order('full_name')
-    const directEmps = (rawDirectEmps || []).map((e: any) => ({
-      ...e,
-      id: useSnapshot ? e.employee_id : e.id
-    }))
+
+    // Filter out superadmin role AND superadmin unit employees (matching /pegawai logic strictly)
+    const validDirectEmps = (rawDirectEmps || []).filter((item: any) => {
+      if (item.role === 'superadmin') return false
+      if (item.is_active === false) return false
+      const unit = Array.isArray(item.m_units) ? item.m_units[0] : item.m_units
+      const code = String(unit?.code || '').toUpperCase()
+      const name = String(unit?.name || '').toUpperCase()
+      if (code === 'ADMIN' || code === 'SUPERADMIN' || name.includes('SUPERADMIN')) return false
+      return true
+    })
+
+    const directEmps = validDirectEmps.map((e: any) => {
+      const unit = Array.isArray(e.m_units) ? e.m_units[0] : e.m_units
+      return {
+        ...e,
+        id: useSnapshot ? e.employee_id : e.id,
+        employee_id: useSnapshot ? e.employee_id : e.id,
+        m_units: unit || undefined
+      }
+    })
 
     if (!directErr && directEmps) {
       // Step 1: Preload kpi unit schemas and active categories (cached for 2 min)
@@ -245,7 +280,7 @@ export async function GET(request: NextRequest) {
         if (ass.is_contract !== null && ass.is_contract !== undefined) {
           contractStatusMap.set(ass.employee_id, {
             is_contract: Boolean(ass.is_contract),
-            contract_percentage: Number(ass.contract_percentage || 100)
+            contract_percentage: ass.contract_percentage !== null && ass.contract_percentage !== undefined ? Number(ass.contract_percentage) : 100
           })
         }
         if (validIndicatorIds.has(ass.indicator_id)) {
@@ -303,13 +338,17 @@ export async function GET(request: NextRequest) {
 
         if (isPartialUnit) {
           isContract = cStatus ? cStatus.is_contract : false
-          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : 100
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined && cStatus.contract_percentage !== null ? cStatus.contract_percentage : 100
         } else if (isMed) {
           isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
-          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined && cStatus.contract_percentage !== null
+            ? cStatus.contract_percentage
+            : (emp.contract_percentage !== undefined && emp.contract_percentage !== null ? Number(emp.contract_percentage) : 100)
         } else {
           isContract = cStatus ? cStatus.is_contract : Boolean(emp.is_contract)
-          contractPercentage = cStatus && cStatus.contract_percentage !== undefined ? cStatus.contract_percentage : (Number(emp.contract_percentage) || 100)
+          contractPercentage = cStatus && cStatus.contract_percentage !== undefined && cStatus.contract_percentage !== null
+            ? cStatus.contract_percentage
+            : (emp.contract_percentage !== undefined && emp.contract_percentage !== null ? Number(emp.contract_percentage) : 100)
         }
 
         return {

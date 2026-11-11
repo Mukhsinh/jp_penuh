@@ -583,9 +583,10 @@ export default function ReportsPage() {
       }
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
+      const revSuffix = selectedRevenueType ? `-${selectedRevenueType}` : ''
       const a = Object.assign(document.createElement('a'), {
         href: url,
-        download: `${selectedReport}-${selectedPeriod}.${format === 'excel' ? 'xlsx' : 'pdf'}`,
+        download: `${selectedReport}-${selectedPeriod}${revSuffix}.${format === 'excel' ? 'xlsx' : 'pdf'}`,
       })
       document.body.appendChild(a)
       a.click()

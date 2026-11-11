@@ -39,7 +39,7 @@ async function fetchAllRows(
  * Helper to get active employee IDs in a given unit and period
  */
 async function getUnitEmployeeIds(adminClient: any, unitId: string, period: string): Promise<string[]> {
-    // 1. Try period snapshot
+    // 1. Try period snapshot (all active employees in the period snapshot for that unit)
     const { data: snapEmps } = await adminClient
         .from('t_employee_period_snapshots')
         .select('employee_id')
