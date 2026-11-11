@@ -44,8 +44,8 @@ export const PARTIAL_ELIGIBLE_KEYWORDS = [
 ]
 
 /**
- * Determines if a unit is eligible for the 'Sebagian' (partial percentage) feature
- * specifically for Pendapatan UMUM: KEPERAWATAN, RADIOLOGI, and REKAM MEDIK.
+ * Determines if a unit is eligible for the 'Sebagian' (partial percentage) feature:
+ * KEPERAWATAN, RADIOLOGI, and REKAM MEDIK (eligible for Pendapatan BPJS and UMUM).
  * @param unitId - The unit's UUID
  * @param unitName - The unit's display name
  */

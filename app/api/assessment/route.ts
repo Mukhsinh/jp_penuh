@@ -475,7 +475,7 @@ export async function GET(request: NextRequest) {
       .eq('id', employeeId)
       .maybeSingle()
 
-    const isPartialUnit = isPartialEligibleUnit(empRecord?.unit_id) && revenueType === 'umum'
+    const isPartialUnit = isPartialEligibleUnit(empRecord?.unit_id) && (revenueType === 'bpjs' || revenueType === 'umum')
     const contractAssessment = assessments?.find((a: any) => a.is_contract !== null && a.is_contract !== undefined)
 
     let isContract = false

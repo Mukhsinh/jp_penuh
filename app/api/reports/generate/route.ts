@@ -1336,8 +1336,8 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       return { indexScore, priorityScore }
     }
 
-    // Check contract status for Medis unit OR partial percentage for KEPERAWATAN, RADIOLOGI, REKAM MEDIK in UMUM
-    const isPartialUnit = isPartialEligibleUnit(uId, unitName) && revenueType === 'umum'
+    // Check contract status for Medis unit OR partial percentage for KEPERAWATAN, RADIOLOGI, REKAM MEDIK in BPJS & UMUM
+    const isPartialUnit = isPartialEligibleUnit(uId, unitName) && (revenueType === 'bpjs' || revenueType === 'umum')
     let isContract = false
     let contractPercentage = 100
 
@@ -1737,7 +1737,7 @@ async function generateIncentiveReport(supabase: any, period: string, unitId?: s
       tax_status: emp.tax_status || 'TK/0',
       employee_status: (isMedical && data.is_contract)
         ? `Kontrak (${data.contract_percentage}%)`
-        : (isPartialEligibleUnit(uId, unitName) && revenueType === 'umum' && data.is_contract)
+        : (isPartialEligibleUnit(uId, unitName) && (revenueType === 'bpjs' || revenueType === 'umum') && data.is_contract)
           ? `Sebagian (${data.contract_percentage}%)`
           : (emp.employment_status || ((emp.employee_status === 'active' || emp.employee_status === 'ASN') ? 'ASN' : (emp.employee_status || 'BLUD'))),
       is_contract: Boolean(data.is_contract),

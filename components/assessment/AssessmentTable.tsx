@@ -154,7 +154,7 @@ export default function AssessmentTable({
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         <span>{employee.full_name}</span>
                         {employee.is_contract && (
-                          revenueType === 'umum' && isPartialEligibleUnit(employee.unit_id, employee.unit_name) ? (
+                          isPartialEligibleUnit(employee.unit_id, employee.unit_name) ? (
                             <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300 text-[10px] py-0 px-2 font-semibold">
                               Sebagian ({employee.contract_percentage || 80}%)
                             </Badge>

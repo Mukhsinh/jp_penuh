@@ -118,7 +118,7 @@ export default function AssessmentFormDialog({
   const isPartialUnit = isPartialEligibleUnit(employee?.unit_id, employee?.unit_name)
 
   const [activeRevenueType, setActiveRevenueType] = useState<'bpjs' | 'umum'>(revenueType)
-  const showPartialFeature = isPartialUnit && activeRevenueType === 'umum'
+  const showPartialFeature = isPartialUnit && (activeRevenueType === 'bpjs' || activeRevenueType === 'umum')
 
   const [kpiSchemaMode, setKpiSchemaMode] = useState<'same' | 'different'>('same')
   const [applyToUmum, setApplyToUmum] = useState<boolean>(false)
@@ -145,7 +145,7 @@ export default function AssessmentFormDialog({
           : 80
       )
       const currentRev = revenueType || activeRevenueType
-      const isEligible = isPartialEligibleUnit(employee?.unit_id, employee?.unit_name) && currentRev === 'umum'
+      const isEligible = isPartialEligibleUnit(employee?.unit_id, employee?.unit_name) && (currentRev === 'bpjs' || currentRev === 'umum')
       if (isEligible) {
         const hasSavedPartial = Boolean(employee?.is_partial || (employee?.is_contract && !isMedicalUnit))
         setIsPartial(hasSavedPartial)
@@ -243,8 +243,8 @@ export default function AssessmentFormDialog({
               }
             }
           }
-        } else if (isPartialUnit && revenueType === 'umum') {
-          // Load partial percentage for KEPERAWATAN, RADIOLOGI, and REKAM MEDIK in Pendapatan UMUM
+        } else if (isPartialUnit && (revenueType === 'bpjs' || revenueType === 'umum')) {
+          // Load partial percentage for KEPERAWATAN, RADIOLOGI, and REKAM MEDIK in Pendapatan BPJS & UMUM
           const partialItem = data.assessments?.find((item: any) => item.is_contract !== null && item.is_contract !== undefined)
           if (partialItem) {
             setIsPartial(Boolean(partialItem.is_contract))
@@ -1508,7 +1508,7 @@ export default function AssessmentFormDialog({
           </div>
         )}
 
-        {/* Fitur Sebagian (Khusus Unit KEPERAWATAN, RADIOLOGI, dan REKAM MEDIK pada Pendapatan UMUM) */}
+        {/* Fitur Sebagian (Khusus Unit KEPERAWATAN, RADIOLOGI, dan REKAM MEDIK pada Pendapatan BPJS & UMUM) */}
         {showPartialFeature && (
           <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-amber-50 via-orange-50/60 to-amber-50 border-2 border-amber-300 rounded-xl shadow-sm">
             <div className="flex flex-wrap items-center gap-3">

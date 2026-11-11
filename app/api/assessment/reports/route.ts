@@ -417,7 +417,7 @@ async function getAssessmentReport(supabase: any, currentEmp: any, period: strin
   const topPerformers = Array.from(employeeScores.entries())
     .map(([employeeId, data]: [string, any]) => {
       const isMedical = isMedicalUnit(null, data.unit_name);
-      const isPartial = isPartialEligibleUnit(null, data.unit_name) && revenueType === 'umum';
+      const isPartial = isPartialEligibleUnit(null, data.unit_name) && (revenueType === 'bpjs' || revenueType === 'umum');
       const isContract = Boolean(data.is_contract);
       const contractMultiplier = (isMedical && isContract)
         ? (Math.max(0, Number(data.contract_percentage) || 100) / 100)

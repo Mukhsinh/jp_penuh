@@ -295,7 +295,7 @@ export async function GET(request: NextRequest) {
         const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
 
         const isMed = isMedicalUnit(emp.unit_id, (emp.m_units as any)?.name)
-        const isPartialUnit = isPartialEligibleUnit(emp.unit_id, (emp.m_units as any)?.name) && revenueType === 'umum'
+        const isPartialUnit = isPartialEligibleUnit(emp.unit_id, (emp.m_units as any)?.name) && (revenueType === 'bpjs' || revenueType === 'umum')
         const cStatus = contractStatusMap.get(emp.id)
 
         let isContract = false
